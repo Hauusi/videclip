@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+*.log
+.DS_Store
+client/dist/
+server/.env
+server/cookies.txt
+cookies.txt
+server/.youtube-browser-profile/
+tmp/

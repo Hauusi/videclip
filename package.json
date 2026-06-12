@@ -1,0 +1,18 @@
+{
+  "name": "videclip",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Professional video repurposing tool",
+  "scripts": {
+    "install:all": "npm install && cd server && npm install && cd ../client && npm install",
+    "dev": "concurrently -n server,client -c blue,magenta \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
+    "build": "npm run build --prefix client",
+    "start": "concurrently -k -n server,client -c blue,magenta \"npm run start --prefix server\" \"npm run dev --prefix client\"",
+    "start:server": "npm run start --prefix server",
+    "docs:pdf": "node docs/projekt-dokumentation/generate-pdf.mjs",
+    "docs:overview-pdf": "node docs/projekt-dokumentation/generate-overview-pdf.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

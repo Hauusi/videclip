@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8"/>
+  <title>PeakClip — Komplettübersicht</title>
+  <style>
+    @page { size: A4; margin: 16mm 14mm; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 10pt;
+      line-height: 1.42;
+      color: #1a1a2e;
+    }
+    h1 { font-size: 20pt; color: #5b21b6; margin: 0 0 8pt; page-break-after: avoid; }
+    h2 {
+      font-size: 13.5pt;
+      color: #6d28d9;
+      margin: 16pt 0 7pt;
+      padding-bottom: 3pt;
+      border-bottom: 2px solid #e9d5ff;
+      page-break-after: avoid;
+    }
+    h3 { font-size: 11pt; color: #7c3aed; margin: 10pt 0 5pt; page-break-after: avoid; }
+    p { margin: 0 0 7pt; }
+    li { margin: 0 0 3pt 14pt; }
+    hr { border: none; border-top: 1px solid #ddd; margin: 12pt 0; }
+    code {
+      font-family: Consolas, monospace;
+      font-size: 8.5pt;
+      background: #f3f4f6;
+      padding: 1pt 4pt;
+      border-radius: 3pt;
+    }
+    pre.diagram {
+      font-family: Consolas, 'Courier New', monospace;
+      font-size: 7.5pt;
+      line-height: 1.25;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      color: #334155;
+      padding: 10pt 12pt;
+      border-radius: 6pt;
+      white-space: pre;
+      overflow-x: auto;
+      page-break-inside: avoid;
+      margin: 8pt 0 12pt;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 6pt 0 12pt;
+      font-size: 9pt;
+      page-break-inside: avoid;
+    }
+    th, td {
+      border: 1px solid #d1d5db;
+      padding: 5pt 7pt;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: #f5f3ff; color: #5b21b6; font-weight: 600; }
+    tr:nth-child(even) td { background: #fafafa; }
+    .cover {
+      text-align: center;
+      padding: 50pt 0 30pt;
+      page-break-after: always;
+      background: linear-gradient(180deg, #f5f3ff 0%, #fff 100%);
+      border-radius: 8pt;
+      margin-bottom: 20pt;
+    }
+    .cover h1 { font-size: 26pt; margin-bottom: 12pt; }
+    .cover .sub { font-size: 13pt; color: #64748b; margin: 4pt 0; }
+    .cover .ver { font-size: 10pt; color: #94a3b8; margin-top: 20pt; }
+    .badge {
+      display: inline-block;
+      background: #7c3aed;
+      color: white;
+      font-size: 8pt;
+      padding: 3pt 10pt;
+      border-radius: 20pt;
+      margin-top: 8pt;
+    }
+  </style>
+</head>
+<body>
+  <div class="cover">
+    <h1>PeakClip</h1>
+    <p class="sub">Komplettübersicht · Architektur · Prozesse · Neuerungen</p>
+    <p class="sub">YouTube → KI-Clips → Shorts / TikTok / Reels</p>
+    <span class="badge">Version 2.0 · Juni 2026</span>
+    <p class="ver">Produktion: Hetzner VPS · /opt/videclip</p>
+  </div>
+  <h1>PeakClip — Komplettübersicht &amp; Neuerungen</h1>
+
+<p><strong>Version:</strong> 2.0 · <strong>Stand:</strong> Juni 2026  </p>
+<p><strong>Produktion:</strong> Hetzner VPS <code>62.238.39.31</code> · Pfad <code>/opt/videclip</code></p>
+
+<hr/>
+
+<h2>1. Was ist PeakClip?</h2>
+
+<p>PeakClip (intern: Videclip) wandelt lange YouTube-Videos und Uploads in <strong>virale Short-Form-Clips</strong> um — optimiert für <strong>YouTube Shorts, TikTok und Reels</strong> (Standard <strong>9:16</strong>).</p>
+
+<table>
+<tr><th>Schritt</th><th>Beschreibung</th></tr>
+<tr><td>Import</td><td>YouTube-URL oder lokales Video hochladen</td></tr>
+<tr><td>KI-Analyse</td><td>Claude findet die besten Highlight-Momente</td></tr>
+<tr><td>Clip-Erstellung</td><td>Schnitt, Transkription, Rendering mit Untertiteln</td></tr>
+<tr><td>Bearbeitung</td><td>Trim, Hook, Bild, Overlays, Musik, Untertitel</td></tr>
+<tr><td>Export</td><td>Einzelclip oder ZIP mit allen Clips</td></tr>
+</table>
+
+<hr/>
+
+<h2>2. System-Architektur (Übersicht)</h2>
+
+<p>``<code></p>
+<p>┌─────────────────────────────────────────────────────────────────┐</p>
+<p>│                        BENUTZER (Browser)                        │</p>
+<p>│  React + Vite · PeakClip UI · Editor · Projekt-Dashboard         │</p>
+<p>└────────────────────────────┬────────────────────────────────────┘</p>
+<p>                             │ HTTPS / API</p>
+<p>┌────────────────────────────▼────────────────────────────────────┐</p>
+<p>│                   NODE.JS SERVER (Express)                       │</p>
+<p>│  analyzePipeline · previewCache · clipExport · projectStore      │</p>
+<p>│  cookieRefresh · projectThumbnail · FFmpeg · Claude · Groq     │</p>
+<p>└─────┬──────────────┬──────────────┬──────────────┬────────────┘</p>
+<p>      │              │              │              │</p>
+<p>      ▼              ▼              ▼              ▼</p>
+<p>  Anthropic      Groq Whisper    FFmpeg       yt-dlp + Cookies</p>
+<p>  (Claude)       (Untertitel)    (Render)     (Download)</p>
+<p>      │              │              │              │</p>
+<p>      └──────────────┴──────────────┴──────────────┘</p>
+<p>                             │</p>
+<p>      ┌──────────────────────┼──────────────────────┐</p>
+<p>      ▼                      ▼                      ▼</p>
+<p>  bgutil POT            WARP SOCKS5           Puppeteer</p>
+<p>  (Port 4416)           (Port 40000)          (Cookie-Refresh)</p>
+<p></code>`<code></p>
+
+<h3>Tech-Stack</h3>
+
+<table>
+<tr><th>Ebene</th><th>Technologie</th></tr>
+<tr><td>Frontend</td><td>React 18, Vite, Tailwind CSS</td></tr>
+<tr><td>Backend</td><td>Node.js (ESM), Express</td></tr>
+<tr><td>KI Highlights</td><td>Anthropic Claude Sonnet</td></tr>
+<tr><td>Sprache/STT</td><td>Groq Whisper large-v3</td></tr>
+<tr><td>Video</td><td>FFmpeg, ffprobe, yt-dlp</td></tr>
+<tr><td>Thumbnails</td><td>Python rembg + OpenCV, Node sharp</td></tr>
+<tr><td>Hosting</td><td>Hetzner CX, Ubuntu, systemd</td></tr>
+</table>
+
+<hr/>
+
+<h2>3. Analyze-Pipeline (Server)</h2>
+
+<p><strong>Einstieg:</strong> </code>POST /api/analyze<code> → </code>runAnalyzeJob()<code></p>
+
+<h3>Prozess-Skizze (vereinfacht)</h3>
+
+<p></code>`<code></p>
+<p>[URL / Upload]</p>
+<p>      │</p>
+<p>      ▼</p>
+<p>┌─────────────┐     ┌──────────────────┐     ┌─────────────────┐</p>
+<p>│  DOWNLOAD   │────▶│  KI-ANALYSE      │────▶│  CLIPS SCHNEIDEN │</p>
+<p>│  source.mp4 │     │  Claude + Hook   │     │  raw_&lt;id&gt;.mp4    │</p>
+<p>└─────────────┘     └──────────────────┘     └────────┬────────┘</p>
+<p>                                                      │</p>
+<p>                      ┌───────────────────────────────┤</p>
+<p>                      ▼                               ▼</p>
+<p>              ┌───────────────┐              ┌────────────────┐</p>
+<p>              │ TRANSKRIPT    │              │ RENDER 9:16    │</p>
+<p>              │ Groq / Clip   │              │ plain + final  │</p>
+<p>              └───────────────┘              └────────┬───────┘</p>
+<p>                                                      │</p>
+<p>                                                      ▼</p>
+<p>                                              ┌────────────────┐</p>
+<p>                                              │ PROJEKT-THUMB  │</p>
+<p>                                              │ 16:9 YouTube   │</p>
+<p>                                              │ rembg + Layout │</p>
+<p>                                              └────────────────┘</p>
+<p></code>`<code></p>
+
+<h3>Phasen im Detail</h3>
+
+<table>
+<tr><th>Phase</th><th>Aktion</th><th>Fortschritt (ca.)</th></tr>
+<tr><td>0</td><td>Video laden, Metadaten, Claude-Highlight-Erkennung</td><td>10–30 %</td></tr>
+<tr><td>1</td><td>Rohclips schneiden (parallel)</td><td>50 %</td></tr>
+<tr><td>2</td><td>Alle Clips transkribieren (Groq)</td><td>65 %</td></tr>
+<tr><td>3</td><td>Clips rendern (9:16, Untertitel, Plain-Overview)</td><td>85 %</td></tr>
+<tr><td>4</td><td>Projekt-Thumbnail generieren (16:9)</td><td>90 %</td></tr>
+<tr><td>5</td><td>meta.json, Projekt registrieren</td><td>100 %</td></tr>
+</table>
+
+<h3>UI-Fortschritt (4 Schritte — NEU)</h3>
+
+<p>Früher gab es 5 Schritte mit separatem „Untertitel“. Transkription läuft weiter im Hintergrund, in der UI sind es nur noch <strong>4 Schritte</strong>:</p>
+
+<table>
+<tr><th>#</th><th>Schritt</th><th>Server-Step(s)</th></tr>
+<tr><td>1</td><td>Import</td><td>fetching</td></tr>
+<tr><td>2</td><td>KI-Analyse</td><td>analyzing</td></tr>
+<tr><td>3</td><td>Clips erstellen</td><td>editing + transcribing</td></tr>
+<tr><td>4</td><td>Fertig</td><td>ready</td></tr>
+</table>
+
+<hr/>
+
+<h2>4. Editor &amp; Clip-Bearbeitung (Frontend)</h2>
+
+<h3>6-Schritte-Editor</h3>
+
+<p></code>`<code></p>
+<p>Schritt 1 — Clip      Ausschnitt wählen (Trim-Slider)</p>
+<p>Schritt 2 — Hook      Cold-open, Spannungs-Moment</p>
+<p>Schritt 3 — Bild      Aspect Ratio (9:16 / 1:1 / 16:9)</p>
+<p>Schritt 4 — Overlays  Wide-Overlay, Webcam-PiP</p>
+<p>Schritt 5 — Musik     Preset oder Upload</p>
+<p>Schritt 6 — Untertitel Style, CTA-Text</p>
+<p></code>`<code></p>
+
+<h3>Aspect Ratio — Regeln (NEU)</h3>
+
+<table>
+<tr><th>Bereich</th><th>Format</th><th>Erklärung</th></tr>
+<tr><td><strong>Clip-Vorschau &amp; Export</strong></td><td><strong>9:16</strong> (Standard)</td><td>Shorts/TikTok/Reels</td></tr>
+<tr><td><strong>Projekt-Dashboard</strong></td><td><strong>16:9</strong></td><td>YouTube-Style Thumbnails</td></tr>
+<tr><td><strong>Clip-Karten (Overview)</strong></td><td><strong>9:16</strong></td><td>Vertikale Vorschau-Clips</td></tr>
+</table>
+
+<p>Der Editor startet <strong>immer in 9:16</strong>, unabhängig von gespeicherten Einstellungen.</p>
+
+<h3>Live-Trim-Vorschau (NEU)</h3>
+
+<p>Beim Verschieben der Trim-Griffe:</p>
+
+<p></code>`<code></p>
+<p>┌────────────────────────────────────────┐</p>
+<p>│  [9:16 Video-Frame]                    │</p>
+<p>│                                        │</p>
+<p>│  Quellvideo wird direkt im Browser     │</p>
+<p>│  auf Start/Ende gesprungen —          │</p>
+<p>│  KEIN Server-Render beim Trimmen       │</p>
+<p>│                                        │</p>
+<p>│  ▶ ━━━━━●━━━━━━━━  0:12 / 0:38  LIVE  │</p>
+<p>└────────────────────────────────────────┘</p>
+<p></code>`<code></p>
+
+<li><strong>Eigene Player-Leiste</strong> (Play, Scrubber, eine Zeitangabe)</li>
+<li><strong>Keine</strong> doppelten Browser-Controls mehr</li>
+<li>Server-Render nur bei aktiven Effekten (Untertitel, Hook, Musik, …)</li>
+
+<h3>Hook-Logik (NEU)</h3>
+
+<p></code>`<code></p>
+<p>                    hook_peak_time (KI)</p>
+<p>                           │</p>
+<p>                           ▼</p>
+<p>              Liegt Peak im Ausschnitt?</p>
+<p>                    /         \</p>
+<p>                  JA          NEIN</p>
+<p>                  │              │</p>
+<p>                  │              ▼</p>
+<p>                  │     Clip automatisch um Hook</p>
+<p>                  │     neu ausrichten (buildTrimAroundHook)</p>
+<p>                  │              │</p>
+<p>                  └──────┬───────┘</p>
+<p>                         ▼</p>
+<p>              Cold-open aktivieren möglich</p>
+<p>              (Teaser + Cliffhanger-Text)</p>
+<p></code>`<code></p>
+
+<p><strong>Hook-Quellen (Priorität):</strong></p>
+<li></code>hook_peak_time<code> aus KI-Analyse</li>
+<li></code>zoom_moments[0]<code> als Fallback</li>
+<li>Berechneter Peak bei ~68 % der Original-Clip-Länge</li>
+
+<p><strong>Bei Cold-open AN</strong> und Hook außerhalb: Clip wird <strong>automatisch</strong> am Hook ausgerichtet.</p>
+
+<hr/>
+
+<h2>5. Automatische Projekt-Thumbnails (NEU)</h2>
+
+<p>Nach jeder Analyse wird </code>thumbs/project.jpg<code> erzeugt — <strong>16:9</strong>, YouTube-Style.</p>
+
+<h3>Pipeline</h3>
+
+<p></code>`<code></p>
+<p>Bestes Frame (Gesicht + Schärfe)</p>
+<p>        │</p>
+<p>        ├──▶ Gameplay-Hintergrund (links, blur)</p>
+<p>        │</p>
+<p>        └──▶ Streamer freistellen (rembg)</p>
+<p>                    │</p>
+<p>                    ▼</p>
+<p>             Weißer Stroke (PIL)</p>
+<p>                    │</p>
+<p>                    ▼</p>
+<p>             Compositing (sharp 1280×720)</p>
+<p>             + Titel + Episodennummer + Mood-Farbe</p>
+<p>                    │</p>
+<p>                    ▼</p>
+<p>             thumbs/project.jpg</p>
+<p></code>`<code></p>
+
+<table>
+<tr><th>Datei</th><th>Funktion</th></tr>
+<tr><td></code>server/scripts/thumbnail_prep.py<code></td><td>Frame-Wahl, Webcam-Ecke, rembg</td></tr>
+<tr><td></code>server/src/services/projectThumbnail.js<code></td><td>Layout, Text, Export</td></tr>
+<tr><td></code>server/requirements-thumbnail.txt<code></td><td>opencv, rembg, Pillow</td></tr>
+</table>
+
+<p><strong>Projekt-Karten</strong> zeigen dieses 16:9-Thumbnail. <strong>Clip-Karten</strong> bleiben 9:16.</p>
+
+<hr/>
+
+<h2>6. Produktionsserver (Hetzner)</h2>
+
+<h3>Infrastruktur</h3>
+
+<table>
+<tr><th>Dienst</th><th>Zweck</th></tr>
+<tr><td></code>videclip.service<code></td><td>Haupt-App (Node)</td></tr>
+<tr><td></code>bgutil-pot.service<code></td><td>PO-Token für yt-dlp (Port 4416)</td></tr>
+<tr><td></code>warp-proxy.service<code></td><td>Cloudflare WARP SOCKS5 (Port 40000)</td></tr>
+</table>
+
+<h3>YouTube-Download-Stack</h3>
+
+<p></code>`<code></p>
+<p>yt-dlp</p>
+<p>  ├── Cookies (cookies.txt)</p>
+<p>  ├── bgutil PO-Token (127.0.0.1:4416)</p>
+<p>  ├── WARP Proxy (socks5://127.0.0.1:40000)</p>
+<p>  └── Player-Clients: mweb, web_safari, android_vr</p>
+<p></code>`<code></p>
+
+<h3>Wichtige </code>.env<code>-Einträge (Server)</h3>
+
+<p></code>`<code></p>
+<p>COOKIES_PATH=/opt/videclip/server/cookies.txt</p>
+<p>COOKIES_SKIP_BROWSER_EXPORT=1</p>
+<p>YTDLP_PATH=/usr/local/bin/yt-dlp</p>
+<p>YTDLP_POT_BASE_URL=http://127.0.0.1:4416</p>
+<p>YTDLP_PROXY=socks5://127.0.0.1:40000</p>
+<p>PYTHON_PATH=python3</p>
+<p></code>`<code></p>
+
+<h3>Wartung</h3>
+
+<table>
+<tr><th>Aufgabe</th><th>Aktion</th></tr>
+<tr><td>Logs</td><td></code>journalctl -u videclip -f<code></td></tr>
+<tr><td>Cookies abgelaufen</td><td></code>cookies.txt<code> vom PC per SCP hochladen</td></tr>
+<tr><td>Client deployen</td><td></code>npm run build<code> + </code>client/dist<code> auf Server</td></tr>
+<tr><td>Thumbnail-Deps</td><td></code>pip install -r requirements-thumbnail.txt<code></td></tr>
+</table>
+
+<p><strong>Wichtig:</strong> WARP nur als <strong>Proxy-Modus</strong>, nicht Full-Tunnel (SSH-Probleme).</p>
+
+<hr/>
+
+<h2>7. Neuerungen — Zusammenfassung</h2>
+
+<table>
+<tr><th>Feature</th><th>Beschreibung</th><th>Status</th></tr>
+<tr><td>4-Schritte-Pipeline</td><td>Untertitel in „Clips erstellen“ integriert</td><td>Live</td></tr>
+<tr><td>Projekt 16:9 / Clip 9:16</td><td>Getrennte Aspect Ratios</td><td>Live</td></tr>
+<tr><td>Auto-Projekt-Thumbnail</td><td>rembg + YouTube-Layout</td><td>Live</td></tr>
+<tr><td>Live-Trim</td><td>Sofortige Vorschau ohne Server-Wait</td><td>Live</td></tr>
+<tr><td>Clip-Player</td><td>Eigene Controls, eine Zeitangabe</td><td>Live</td></tr>
+<tr><td>Hook auto-align</td><td>Clip richtet sich am Hook aus</td><td>Live</td></tr>
+<tr><td>Hetzner Production</td><td>WARP + bgutil + Cookies</td><td>Live</td></tr>
+<tr><td>Puppeteer headless</td><td>Kein X-Server auf VPS</td><td>Live</td></tr>
+</table>
+
+<hr/>
+
+<h2>8. Ordnerstruktur (Job-Workspace)</h2>
+
+<p></code>`<code></p>
+<p>%TEMP%/videclip/&lt;jobId&gt;/</p>
+<p>├── source.mp4              Quellvideo</p>
+<p>├── meta.json               Highlights, Settings, projectThumbnailUrl</p>
+<p>├── raw-clips/              Rohschnitte</p>
+<p>├── transcripts/&lt;id&gt;/       STT pro Clip</p>
+<p>├── clips/                  Fertige Clips + plain_&lt;id&gt;.mp4 (9:16 Overview)</p>
+<p>├── thumbs/</p>
+<p>│   ├── &lt;id&gt;.jpg            Clip-Thumbnails</p>
+<p>│   ├── project.jpg         16:9 Projekt-Thumbnail (NEU)</p>
+<p>│   └── project_prep/       rembg-Zwischendateien</p>
+<p>└── previews/               Editor-Previews nach Änderungen</p>
+<p></code>`<code></p>
+
+<hr/>
+
+<h2>9. API-Endpunkte (Kern)</h2>
+
+<table>
+<tr><th>Methode</th><th>Pfad</th><th>Funktion</th></tr>
+<tr><td>POST</td><td></code>/api/analyze<code></td><td>Analyze-Job starten</td></tr>
+<tr><td>GET</td><td></code>/api/job/:id<code></td><td>Job-Status pollen</td></tr>
+<tr><td>POST</td><td></code>/api/preview<code></td><td>Editor-Vorschau rendern</td></tr>
+<tr><td>POST</td><td></code>/api/process<code></td><td>Final-Export eines Clips</td></tr>
+<tr><td>GET</td><td></code>/api/files/:jobId/...<code></td><td>Videos, Thumbs, Clips</td></tr>
+<tr><td>GET</td><td></code>/api/projects<code></td><td>Projekt-Liste</td></tr>
+</table>
+
+<hr/>
+
+<h2>10. Vorschau-Cache (Tiered Preview)</h2>
+
+<p>Beim Bearbeiten im Editor werden FFmpeg-Pässe gecacht:</p>
+
+<p></code>`<code></p>
+<p>Tier raw     → Trim/Hook geändert → Neuer Rohschnitt</p>
+<p>Tier pass1   → Aspect/Crop/Grade geändert</p>
+<p>Tier pass2   → Untertitel/Hook-Text geändert</p>
+<p>Tier music   → Nur Musik/Mix geändert (schnell)</p>
+<p>Tier noop    → Cache-Hit, sofortige Antwort</p>
+<p></code>`<code></p>
+
+<p>Nur <strong>Trim ohne Effekte</strong> = Live-Vorschau im Browser (kein Tier nötig).</p>
+
+<hr/>
+
+<h2>11. Deployment vom Windows-PC</h2>
+
+<p></code>`<code>powershell</p>
+<h1>Client bauen</h1>
+<p>cd C:\Users\rapha\Desktop\videclip</p>
+<p>npm run build</p>
+
+<h1>Auf Server kopieren</h1>
+<p>scp -i C:\Users\rapha\.ssh\id_ed25519_hetzner -r client\dist root@62.238.39.31:/opt/videclip/client/</p>
+
+<h1>Server-Dateien (bei Backend-Änderungen)</h1>
+<p>scp -i C:\Users\rapha\.ssh\id_ed25519_hetzner server\src\services\*.js root@62.238.39.31:/opt/videclip/server/src/services/</p>
+
+<h1>Service neu starten</h1>
+<p>ssh -i C:\Users\rapha\.ssh\id_ed25519_hetzner root@62.238.39.31 "systemctl restart videclip"</p>
+<p></code>``</p>
+
+<hr/>
+
+<h2>12. Glossar</h2>
+
+<table>
+<tr><th>Begriff</th><th>Bedeutung</th></tr>
+<tr><td>Cold-open / Hook</td><td>Kurzer Teaser vor dem Hauptclip (Scroll-Stopper)</td></tr>
+<tr><td>Plain Overview</td><td>9:16-Vorschau ohne Effekte nach Analyze</td></tr>
+<tr><td>Live-Trim</td><td>Browser-Vorschau beim Trimmen ohne FFmpeg</td></tr>
+<tr><td>rembg</td><td>KI-Hintergrundentfernung für Thumbnails</td></tr>
+<tr><td>PO-Token</td><td>YouTube-Bypass-Token via bgutil</td></tr>
+<tr><td>Mood</td><td>hype / chill / emotional — beeinflusst KI-Auswahl</td></tr>
+</table>
+
+<hr/>
+
+<p>*PeakClip · Projektdokumentation · Erstellt automatisch aus dem Stand der Codebasis Juni 2026*</p>
+
+</body>
+</html>

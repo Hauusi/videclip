@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8"/>
+  <title>Videclip — Projekthandbuch</title>
+  <style>
+    @page { size: A4; margin: 18mm 16mm; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 10.5pt;
+      line-height: 1.45;
+      color: #1a1a2e;
+      max-width: 100%;
+    }
+    h1 { font-size: 22pt; color: #5b21b6; margin: 0 0 8pt; page-break-after: avoid; }
+    h2 {
+      font-size: 14pt;
+      color: #6d28d9;
+      margin: 18pt 0 8pt;
+      padding-bottom: 4pt;
+      border-bottom: 2px solid #e9d5ff;
+      page-break-after: avoid;
+    }
+    h3 { font-size: 11.5pt; color: #7c3aed; margin: 12pt 0 6pt; page-break-after: avoid; }
+    p { margin: 0 0 8pt; }
+    li { margin: 0 0 4pt 16pt; }
+    hr { border: none; border-top: 1px solid #ddd; margin: 14pt 0; }
+    code {
+      font-family: Consolas, monospace;
+      font-size: 9pt;
+      background: #f3f4f6;
+      padding: 1pt 4pt;
+      border-radius: 3pt;
+    }
+    pre.code {
+      font-family: Consolas, monospace;
+      font-size: 8.5pt;
+      background: #1e1e2e;
+      color: #e2e8f0;
+      padding: 10pt 12pt;
+      border-radius: 6pt;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      page-break-inside: avoid;
+      margin: 8pt 0 12pt;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 8pt 0 14pt;
+      font-size: 9.5pt;
+      page-break-inside: avoid;
+    }
+    th, td {
+      border: 1px solid #d1d5db;
+      padding: 6pt 8pt;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: #f5f3ff; color: #5b21b6; font-weight: 600; }
+    tr:nth-child(even) td { background: #fafafa; }
+    .cover {
+      text-align: center;
+      padding: 60pt 0 40pt;
+      page-break-after: always;
+    }
+    .cover h1 { font-size: 28pt; }
+    .cover p { font-size: 12pt; color: #64748b; }
+  </style>
+</head>
+<body>
+  <div class="cover">
+    <h1>Videclip</h1>
+    <p>Projekthandbuch — Architektur, Prozesse &amp; Ordnerstruktur</p>
+    <p>Version 1.0 · Mai 2026</p>
+  </div>
+  <h1>Videclip — Projekthandbuch</h1>
+
+<p><strong>Version:</strong> 1.0 · <strong>Stand:</strong> Mai 2026  </p>
+<p><strong>Zweck:</strong> YouTube-Videos in virale Short-Form-Clips umwandeln (9:16, Untertitel, Hooks, Effekte).</p>
+
+<hr/>
+
+<h2>1. Überblick</h2>
+
+<p>Videclip ist ein Full-Stack-Tool für Content-Creator:</p>
+
+<li>YouTube-URL einfügen</li>
+<li>KI findet die besten Highlight-Momente</li>
+<li>Automatischer Export als Shorts/TikTok/Reels mit eingebrannten Untertiteln, optional Cold-Open-Hook, Musik und Effekten</li>
+
+<table>
+<tr><th>Komponente</th><th>Technologie</th></tr>
+<tr><td>Frontend</td><td>React 18, Vite, Tailwind CSS</td></tr>
+<tr><td>Backend</td><td>Node.js (ESM), Express</td></tr>
+<tr><td>Highlight-Auswahl</td><td>Anthropic Claude (Sonnet)</td></tr>
+<tr><td>Untertitel (STT)</td><td>Groq Whisper <code>large-v3</code></td></tr>
+<tr><td>Video</td><td>FFmpeg (ffmpeg-static), ffprobe</td></tr>
+<tr><td>Download</td><td>yt-dlp / Piped / ytdl-core (konfigurierbar)</td></tr>
+</table>
+
+<hr/>
+
+<h2>2. Projektstruktur</h2>
+
+<p>``<code></p>
+<p>videclip/</p>
+<p>├── client/                 # React-Frontend (Dev: Port 5173)</p>
+<p>│   └── src/</p>
+<p>│       ├── App.jsx         # Haupt-UI, Analyze-Flow</p>
+<p>│       ├── api.js          # API-Client, Job-Polling</p>
+<p>│       ├── components/     # HighlightCard, InputPanel, …</p>
+<p>│       ├── hooks/          # useLocalStorage</p>
+<p>│       └── utils/          # previewQueue, helpers</p>
+<p>├── server/                 # Express-API (Port 3001)</p>
+<p>│   ├── src/</p>
+<p>│   │   ├── index.js        # Server-Start, Static, Cleanup</p>
+<p>│   │   ├── config.js       # Env, Prompts, Pfade</p>
+<p>│   │   ├── routes/api.js   # REST-Endpunkte</p>
+<p>│   │   ├── services/       # Kernlogik (siehe Kapitel 4)</p>
+<p>│   │   ├── lib/ffmpeg.js   # FFmpeg-Pfad-Binding</p>
+<p>│   │   └── utils/          # YouTube, Cookies, Fehler</p>
+<p>│   ├── assets/music/       # Preset-Hintergrundmusik</p>
+<p>│   └── scripts/            # z. B. wide_content_detect.py</p>
+<p>├── docs/</p>
+<p>│   └── projekt-dokumentation/   # Dieses Handbuch + PDF</p>
+<p>├── package.json            # Root: npm run dev</p>
+<p>└── cookies.txt             # Optional: YouTube-Auth</p>
+<p></code>`<code></p>
+
+<h3>Temporäre Job-Dateien</h3>
+
+<p>Pro Analyze-Job unter </code>%TEMP%/videclip/&lt;jobId&gt;/<code>:</p>
+
+<table>
+<tr><th>Ordner/Datei</th><th>Inhalt</th></tr>
+<tr><td></code>source.mp4<code></td><td>Heruntergeladenes Quellvideo</td></tr>
+<tr><td></code>meta.json<code></td><td>Highlights, Render-Settings, URLs</td></tr>
+<tr><td></code>raw-clips/<code></td><td>Rohschnitte pro Highlight</td></tr>
+<tr><td></code>transcripts/&lt;id&gt;/<code></td><td>STT-Cache, WAV-Extrakte</td></tr>
+<tr><td></code>clips/<code></td><td>Fertige Analyze-Clips mit Untertiteln</td></tr>
+<tr><td></code>thumbs/<code></td><td>Thumbnails</td></tr>
+<tr><td></code>previews/<code></td><td>480p-Preview nach UI-Änderungen</td></tr>
+</table>
+
+<p>Alte Jobs werden nach ca. 30 Minuten gelöscht (</code>tempFiles.js<code>).</p>
+
+<hr/>
+
+<h2>3. Benutzer-Flow (Frontend)</h2>
+
+<p></code>`<code></p>
+<p>[YouTube-URL] → Analyze → Job-Polling → 5 Highlight-Karten</p>
+<p>     ↓</p>
+<p>Pro Karte: Trim, Hook, Caption-Style, Wide-Overlay, Webcam</p>
+<p>     ↓</p>
+<p>Auto-Preview (debounced) oder „Download Clip“ (Final-Export)</p>
+<p></code>`<code></p>
+
+<h3>Wichtige UI-Komponenten</h3>
+
+<table>
+<tr><th>Datei</th><th>Funktion</th></tr>
+<tr><td></code>InputPanel.jsx<code></td><td>URL, Mood, Musik, Aspect Ratio, Caption-Style (global: fire/bold/minimal)</td></tr>
+<tr><td></code>HighlightCard.jsx<code></td><td>Video-Player, Einstellungen, Preview-Queue, Export</td></tr>
+<tr><td></code>ProgressSteps.jsx<code></td><td>fetching → transcribing → analyzing → editing → ready</td></tr>
+<tr><td></code>WideOverlaySelector.jsx<code></td><td>Gaming-UI-Overlay (Buch/Menu) manuell</td></tr>
+<tr><td></code>WebcamSelector.jsx<code></td><td>Webcam-PiP-Position</td></tr>
+</table>
+
+<h3>Globale Einstellungen (</code>App.jsx<code>)</h3>
+
+<li></code>captionStyle<code>: Standard <strong>fire</strong> (orange/rot) für alle Clips eines Jobs</li>
+<li></code>aspectRatio<code>: 9:16, 1:1, 16:9</li>
+<li></code>music<code>, </code>zoom<code>, </code>colorGrade<code>, </code>captions<code></li>
+
+<hr/>
+
+<h2>4. Backend-Services (Hintergrundprozesse)</h2>
+
+<h3>4.1 Analyze-Pipeline (</code>analyzePipeline.js<code>)</h3>
+
+<p><strong>Einstieg:</strong> </code>POST /api/analyze<code> → </code>runAnalyzeJob(jobId, { url, mood, renderSettings })<code></p>
+
+<p></code>`<code></p>
+<p>Phase 0 — Kontext</p>
+<p>  ├─ downloadVideo()</p>
+<p>  ├─ probeVideoSource() — Breite/Höhe</p>
+<p>  ├─ buildHighlightDetectionContext()</p>
+<p>  │    ├─ YouTube-Transcript (Highlight-Suche, KEIN Burn-in)</p>
+<p>  │    └─ Kapitel aus Beschreibung</p>
+<p>  └─ analyzeHighlights() — Claude wählt candidate_id</p>
+
+<p>Phase 0b — Anreicherung</p>
+<p>  ├─ enrichHighlightsWithHook() — Cold-Open, Peak, Cliffhanger</p>
+<p>  └─ boostWeakHighlights() — schwache Clips optimieren</p>
+
+<p>Phase 1 — Schneiden (parallel, concurrency 3)</p>
+<p>  └─ cutRawClipWithHook() → raw_&lt;id&gt;.mp4 + gemessene Hook-Dauer</p>
+
+<p>Phase 2 — STT (sequentiell, concurrency 1)</p>
+<p>  └─ transcribeClipAudio() — Groq Whisper, Wort-Timestamps</p>
+
+<p>Phase 3 — Rendern (sequentiell)</p>
+<p>  └─ processClip() — 2-Pass: Video → ASS-Burn → optional Musik</p>
+<p></code>`<code></p>
+
+<p><strong>Wichtig:</strong> YouTube-Transcript dient nur der <strong>Highlight-Erkennung</strong>. Eingebrannte Untertitel kommen <strong>immer</strong> aus Groq STT pro Clip.</p>
+
+<h3>4.2 Export / Preview (</code>clipExport.js<code>, </code>api.js<code>)</h3>
+
+<table>
+<tr><th>Route</th><th>Ablauf</th></tr>
+<tr><td></code>POST /api/preview<code></td><td></code>prepareExportRawClip()<code> → ggf. Re-Cut + Re-STT → </code>processClip(preview: true)<code></td></tr>
+<tr><td></code>POST /api/clip<code></td><td>Wie Preview, volle Qualität + Musik</td></tr>
+<tr><td></code>POST /api/download-all<code></td><td>ZIP aus </code>clips/<code></td></tr>
+</table>
+
+<p></code>prepareExportRawClip<code> re-schneidet bei Trim-/Hook-Änderung und transkribiert neu wenn nötig.</p>
+
+<h3>4.3 Video-Rendering (</code>ffmpeg.js<code> — </code>processClip<code>)</h3>
+
+<p><strong>3-Pass-Architektur (Caption-Stabilität auf Windows):</strong></p>
+
+<p></code>`<code></p>
+<p>Pass 1 — Video-Composite</p>
+<p>  Crop (9:16) → Zoom → Color Grade → Wide-Overlay → Webcam-PiP</p>
+<p>  Audio: copy (kein loudnorm — Sync mit Untertiteln)</p>
+
+<p>Pass 2 — Untertitel-Burn (captionPipeline.js)</p>
+<p>  ASS-Dateien (Wort-für-Wort + optional Hook-Overlay-ASS)</p>
+<p>  FFmpeg: -vf subtitles=dateiname.ass (relativer Pfad, cwd=workDir)</p>
+
+<p>Pass 3 — Musik (nur Final-Export, nicht Analyze)</p>
+<p>  mixMusicOntoVideo() — Video copy, Audio mix</p>
+<p></code>`<code></p>
+
+<h3>4.4 Cold-Open Hook (</code>hookClip.js<code>, </code>intelligentHook.js<code>, </code>ffmpeg.js<code>)</h3>
+
+<p><strong>Cold-Open</strong> = kurzer Teaser am Anfang, dann Hauptclip von vorne.</p>
+
+<p></code>`<code></p>
+<p>Quellvideo</p>
+<p>    │</p>
+<p>    ├─► Main-Teil schneiden (start_time … end_time)</p>
+<p>    │</p>
+<p>    ├─► Teaser extrahieren (Peak-Moment, Dauer hook_teaser_duration)</p>
+<p>    │       └─ Re-Encode für exakte Länge (ffprobe → hook_teaser_measured_sec)</p>
+<p>    │</p>
+<p>    └─► concat: [Teaser] + [Main] → raw_&lt;id&gt;.mp4</p>
+<p></code>`<code></p>
+
+<table>
+<tr><th>Parameter</th><th>Bedeutung</th></tr>
+<tr><td></code>hook_peak_time<code></td><td>Absoluter Zeitpunkt im Quellvideo für Teaser-Szene</td></tr>
+<tr><td></code>hook_teaser_duration<code></td><td>Gewünschte Teaser-Länge (Slider, 0.5–4 s)</td></tr>
+<tr><td></code>hook_teaser_measured_sec<code></td><td>Tatsächliche Länge nach FFmpeg (ffprobe)</td></tr>
+<tr><td></code>hook<code></td><td>Cliffhanger-Text (Overlay, weiß)</td></tr>
+<tr><td></code>hook_teaser_line<code></td><td>Gesprochene Zeile im Teaser (aus STT)</td></tr>
+</table>
+
+<p></code>intelligentHook.js<code> wählt Peak + Cliffhanger lokal aus YouTube-Transcript (ohne Extra-API-Tokens).</p>
+
+<h3>4.5 Untertitel (</code>transcript.js<code>, </code>preprocess.js<code>, </code>captionAlign.js<code>)</h3>
+
+<p></code>`<code></p>
+<p>Groq Whisper large-v3 (verbose_json, word timestamps)</p>
+<p>    │</p>
+<p>    ├─ parseGroqTranscription() — ein Wort pro Segment</p>
+<p>    ├─ refineWordTimings() — +55 ms Display-Lag (kein aggressives RMS-Filter mehr)</p>
+<p>    ├─ buildClipCaptionTimings()</p>
+<p>    └─ Cache v11 in transcripts/&lt;id&gt;/transcription.json</p>
+
+<p>Render:</p>
+<p>    prepareClipCaptionWords() → resolveCaptionTimings() → buildAssSubtitles()</p>
+<p>    Styles: bold | minimal | fire (+ Keyword-Highlight in captionKeywords.js)</p>
+<p></code>`<code></p>
+
+<p><strong>Quality Gate:</strong> Mindest-Wortanzahl, Coverage; bei Fehlschlag Retry-Strategien (Sprache auto, plain audio).</p>
+
+<h3>4.6 Highlight-Kandidaten (</code>highlightCandidates.js<code>, </code>claude.js<code>)</h3>
+
+<li>Lokale Kandidaten (~12 Fenster) mit Scores, dynamischer Länge (</code>dynamicClipLength.js<code>)</li>
+<li>Claude erhält nur </code>candidate_id<code> — erfindet keine Timestamps</li>
+<li></code>highlightFromCandidate()<code> mappt zurück auf echte start/end</li>
+
+<h3>4.7 Weitere Services</h3>
+
+<table>
+<tr><th>Service</th><th>Aufgabe</th></tr>
+<tr><td></code>download.js<code></td><td>Video + Metadaten von YouTube</td></tr>
+<tr><td></code>youtubeTranscript.js<code></td><td>Transcript für KI</td></tr>
+<tr><td></code>smartCrop.js<code></td><td>Gesichtserkennung (optional OpenCV)</td></tr>
+<tr><td></code>wideContentOverlay.js<code></td><td>Gaming-UI-Erkennung (Python-Script)</td></tr>
+<tr><td></code>webcamPip.js<code></td><td>Webcam-Bild-im-Bild</td></tr>
+<tr><td></code>music.js<code></td><td>Preset-Tracks nach Mood</td></tr>
+<tr><td></code>renderSettings.js<code></td><td>Aspect, Wide-Overlay auto bei 16:9</td></tr>
+<tr><td></code>clipBoost.js<code></td><td>Schwache Clips: Trim, Hook, Effekte</td></tr>
+<tr><td></code>jobs.js<code></td><td>In-Memory Job-Status</td></tr>
+<tr><td></code>previewQueue.js<code></td><td>Server: eine Preview gleichzeitig</td></tr>
+<tr><td></code>cookieRefresh.js<code></td><td>YouTube-Cookies erneuern</td></tr>
+</table>
+
+<hr/>
+
+<h2>5. API-Referenz</h2>
+
+<table>
+<tr><th>Methode</th><th>Pfad</th><th>Beschreibung</th></tr>
+<tr><td>GET</td><td></code>/api/health<code></td><td>Status + Musik-Presets</td></tr>
+<tr><td>POST</td><td></code>/api/analyze<code></td><td>Start Analyze-Job → </code>{ jobId }<code></td></tr>
+<tr><td>GET</td><td></code>/api/jobs/:id<code></td><td>Job-Status + Ergebnis</td></tr>
+<tr><td>POST</td><td></code>/api/preview<code></td><td>Preview-Render (480p)</td></tr>
+<tr><td>POST</td><td></code>/api/clip<code></td><td>Final-Export</td></tr>
+<tr><td>POST</td><td></code>/api/download-all<code></td><td>ZIP-Download</td></tr>
+<tr><td>POST</td><td></code>/api/upload-music<code></td><td>Custom MP3</td></tr>
+<tr><td>POST</td><td></code>/api/cookies/refresh<code></td><td>YouTube-Cookies</td></tr>
+<tr><td>GET</td><td></code>/api/files/:jobId/...<code></td><td>Clips, Thumbs, Previews</td></tr>
+</table>
+
+<h3>Job-Status</h3>
+
+<p></code>fetching<code> → </code>transcribing<code> → </code>analyzing<code> → </code>editing<code> → </code>ready<code> (bzw. </code>error<code>)</p>
+
+<hr/>
+
+<h2>6. Konfiguration (</code>server/.env<code>)</h2>
+
+<table>
+<tr><th>Variable</th><th>Bedeutung</th></tr>
+<tr><td></code>ANTHROPIC_API_KEY<code></td><td>Claude für Highlight-Auswahl</td></tr>
+<tr><td></code>GROQ_API_KEY<code></td><td>Whisper STT für Untertitel</td></tr>
+<tr><td></code>CLAUDE_MODEL<code></td><td>z. B. </code>claude-sonnet-4-6<code></td></tr>
+<tr><td></code>PORT<code></td><td>Standard 3001</td></tr>
+<tr><td></code>COOKIES_PATH<code></td><td>Netscape cookies.txt für YouTube</td></tr>
+<tr><td></code>YTDLP_PATH<code></td><td>yt-dlp Executable</td></tr>
+<tr><td></code>PYTHON_PATH<code></td><td>Für wide_content_detect.py</td></tr>
+</table>
+
+<hr/>
+
+<h2>7. Datenfluss-Diagramm (Analyze)</h2>
+
+<p></code>`<code></p>
+<p>┌─────────────┐     ┌──────────────┐     ┌─────────────┐</p>
+<p>│   YouTube   │────►│   Download   │────►│ source.mp4  │</p>
+<p>└─────────────┘     └──────────────┘     └──────┬──────┘</p>
+<p>                                                │</p>
+<p>         ┌──────────────────────────────────────┘</p>
+<p>         ▼</p>
+<p>┌─────────────────┐     ┌──────────────────┐</p>
+<p>│ YT Transcript   │────►│ Claude: 5 Clips  │</p>
+<p>│ + Kandidaten    │     │ (candidate_id)   │</p>
+<p>└─────────────────┘     └────────┬─────────┘</p>
+<p>                                 │</p>
+<p>         ┌───────────────────────┼───────────────────────┐</p>
+<p>         ▼                       ▼                       ▼</p>
+<p>   ┌──────────┐           ┌──────────┐           ┌──────────┐</p>
+<p>   │ raw clip │           │ raw clip │           │ raw clip │</p>
+<p>   │ + hook   │           │   …      │           │   …      │</p>
+<p>   └────┬─────┘           └────┬─────┘           └────┬─────┘</p>
+<p>        │                      │                      │</p>
+<p>        ▼                      ▼                      ▼</p>
+<p>   ┌──────────┐           ┌──────────┐           ┌──────────┐</p>
+<p>   │ Groq STT │           │ Groq STT │           │ Groq STT │</p>
+<p>   └────┬─────┘           └────┬─────┘           └────┬─────┘</p>
+<p>        │                      │                      │</p>
+<p>        ▼                      ▼                      ▼</p>
+<p>   ┌──────────┐           ┌──────────┐           ┌──────────┐</p>
+<p>   │ FFmpeg   │           │ FFmpeg   │           │ FFmpeg   │</p>
+<p>   │ 3-Pass   │           │ 3-Pass   │           │ 3-Pass   │</p>
+<p>   └────┬─────┘           └────┬─────┘           └────┬─────┘</p>
+<p>        │                      │                      │</p>
+<p>        └──────────────────────┴──────────────────────┘</p>
+<p>                               ▼</p>
+<p>                        meta.json + clips/*.mp4</p>
+<p>                               ▼</p>
+<p>                          React UI</p>
+<p></code>`<code></p>
+
+<hr/>
+
+<h2>8. Bekannte Grenzen</h2>
+
+<table>
+<tr><th>Thema</th><th>Limitierung</th></tr>
+<tr><td>Untertitel-Genauigkeit</td><td>Whisper bei 2+ Sprechern / Cross-Talk limitiert</td></tr>
+<tr><td>Hook-Text vs. Sprache</td><td>Overlay (</code>hook<code>) ≠ Wort-Untertitel (STT)</td></tr>
+<tr><td>Preview vs. Analyze</td><td>Preview 480p, ohne Musik; Analyze = Referenz-Qualität</td></tr>
+<tr><td>Rate Limits</td><td>Groq 429 → Retry mit Backoff</td></tr>
+<tr><td>YouTube</td><td>Cookies können ablaufen → </code>/api/cookies/refresh<code></td></tr>
+</table>
+
+<h3>Geplante Verbesserungen (Roadmap)</h3>
+
+<li>Speaker-Diarization / Hauptsprecher-Isolation</li>
+<li>YouTube-Transcript als Wort-Sync wo verfügbar</li>
+<li>A2-lite Jump-Cuts (Pacing)</li>
+<li>Caption-Editor in der UI</li>
+
+<hr/>
+
+<h2>9. Entwicklung &amp; Betrieb</h2>
+
+<p></code>`<code>bash</p>
+<h1>Installation</h1>
+<p>npm run install:all</p>
+
+<h1>Entwicklung (Server + Client)</h1>
+<p>npm run dev</p>
+<h1>UI:  http://localhost:5173</h1>
+<h1>API: http://localhost:3001</h1>
+
+<h1>Production Build</h1>
+<p>npm run build</p>
+<p>npm start</p>
+<p></code>`<code></p>
+
+<h3>Logs beobachten</h3>
+
+<table>
+<tr><th>Präfix</th><th>Bedeutung</th></tr>
+<tr><td></code>[Pipeline]<code></td><td>Analyze-Phasen</td></tr>
+<tr><td></code>[transcript]<code></td><td>Groq STT</td></tr>
+<tr><td></code>[captions]<code></td><td>ASS-Erstellung / Fehler</td></tr>
+<tr><td></code>[cut]<code></td><td>FFmpeg Schnitt, gemessene Hook-Dauer</td></tr>
+<tr><td></code>[caption-align]<code></td><td>Timing-Lag</td></tr>
+<tr><td></code>[intelligent-hook]<code></td><td>Hook-Peak + Cliffhanger</td></tr>
+</table>
+
+<hr/>
+
+<h2>10. Datei-Index (Services)</h2>
+
+<table>
+<tr><th>Datei</th><th>Verantwortung</th></tr>
+<tr><td></code>analyzePipeline.js<code></td><td>Gesamter Analyze-Job</td></tr>
+<tr><td></code>claude.js<code></td><td>Claude API, Highlight-Parsing</td></tr>
+<tr><td></code>highlightCandidates.js<code></td><td>Lokale Kandidaten-Generierung</td></tr>
+<tr><td></code>highlightQuality.js<code></td><td>Confidence, Finalisierung</td></tr>
+<tr><td></code>transcript.js<code></td><td>Groq STT, Cache, Quality Gate</td></tr>
+<tr><td></code>ffmpeg.js<code></td><td>Schnitt, processClip, Hook-Concat</td></tr>
+<tr><td></code>clipExport.js<code></td><td>Preview/Export-Vorbereitung</td></tr>
+<tr><td></code>preprocess.js<code></td><td>ASS-Untertitel, Formatierung</td></tr>
+<tr><td></code>captionPipeline.js<code></td><td>2-Pass ASS-Burn, Musik-Mix</td></tr>
+<tr><td></code>captionAlign.js<code></td><td>Display-Lag auf Wort-Timestamps</td></tr>
+<tr><td></code>hookClip.js<code></td><td>Cold-Open-Logik, Dauer-Helfer</td></tr>
+<tr><td></code>intelligentHook.js<code></td><td>Teaser-Peak, Cliffhanger</td></tr>
+<tr><td></code>coldOpenTiming.js<code></td><td>Mindest-Abstand Peak ↔ Clip-Ende</td></tr>
+<tr><td></code>dynamicClipLength.js<code></td><td>15–22 s Clip-Länge</td></tr>
+<tr><td></code>renderSettings.js<code></td><td>Globale Render-Optionen</td></tr>
+<tr><td></code>captionKeywords.js`</td><td>Fire-Style Keyword-Betonung</td></tr>
+</table>
+
+<hr/>
+
+<p>*Ende des Handbuchs — Videclip © Projekt videclip*</p>
+
+</body>
+</html>

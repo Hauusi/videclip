@@ -1,0 +1,44 @@
+---
+description: Keep README.md and AGENTS.md in sync with code changes (persistent context)
+alwaysApply: true
+---
+
+# Documentation sync (context persistence)
+
+`README.md` is the **single source of truth** for architecture, shooter pipeline, deploy, and known pitfalls. Chat context is limited — future sessions read the repo, not this conversation.
+
+## Required on every relevant change
+
+When you add, remove, or materially change:
+
+- Pipeline phases (`analyzePipeline.js`, `claude.js`, highlight flow)
+- Shooter/HUD/montage logic (`montageClip.js`, `shooterClusters.js`, `kill_feed_detect.py`, `hudKillFeed.js`)
+- Deploy paths, env vars, API routes
+- Selection rules, timing constants, or quality filters
+
+**In the same session:**
+
+1. Update the matching section in `README.md`
+2. Add a row to `README.md` → **Changelog**
+3. Bump `Last updated` date at top of README
+4. Update `AGENTS.md` if quick-reference paths or triggers changed
+
+## Do not
+
+- Leave README describing removed features
+- Document only in chat without updating README
+- Create new scattered docs unless user asks; prefer README + existing `docs/projekt-dokumentation/`
+
+## README sections to touch
+
+| Change type | README section |
+|-------------|----------------|
+| New service/file | Key files table (shooter or pipeline) |
+| Bug fix with regression risk | **Do NOT reintroduce** + Changelog |
+| Deploy/process | **Production deploy** |
+| New env var | **Setup** + `server/.env.example` if needed |
+| Log/debug | **Debug logs** |
+
+## After shooter deploy
+
+Verify production logs match README **Debug logs** expectations before marking task done.
