@@ -411,6 +411,7 @@ export async function runAnalyzeJob(
         : 'en';
 
     setJobStep(jobId, 'analyzing', 'Erkenne Spiel & Kategorie…', 27);
+    const classT0 = Date.now();
     const contentClass = await resolveContentClassification({
       title: videoTitle,
       description: detectionContext.description || '',
@@ -421,6 +422,9 @@ export async function runAnalyzeJob(
       duration: sourceDuration,
       detectVisual: detectGameFromVideo,
     });
+    console.log(
+      `[Pipeline] Classification done in ${((Date.now() - classT0) / 1000).toFixed(1)}s`,
+    );
     console.log(
       `[Pipeline] Content category: ${contentClass.category}` +
         `${contentClass.game ? ` (${contentClass.game})` : ''}` +

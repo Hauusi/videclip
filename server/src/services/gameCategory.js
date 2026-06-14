@@ -533,8 +533,20 @@ export async function resolveContentClassification({
     gamingFallbackText: [title, description, tagText, text].join(' '),
   });
 
-  // Always sample gameplay HUD when video is available — title alone is unreliable.
-  const shouldRunVisual = Boolean(sourceVideo && detectVisual);
+  // Sample gameplay HUD when video is available — skip if text already confident shooter.
+  const textConfidentShooter =
+    preliminary.category === 'shooter' &&
+    preliminary.confidence >= 72 &&
+    (sources.includes('title') || sources.includes('tags') || sources.includes('channel'));
+
+  const shouldRunVisual = Boolean(sourceVideo && detectVisual && !textConfidentShooter);
+
+  if (textConfidentShooter) {
+    console.log(
+      `[game-visual] skipped — shooter already identified from metadata ` +
+        `(${preliminary.game || 'shooter'}, conf=${preliminary.confidence}%)`,
+    );
+  }
 
   if (shouldRunVisual) {
     const visual = await detectVisual(sourceVideo, duration);

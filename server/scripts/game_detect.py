@@ -329,14 +329,24 @@ def main():
     frames_used = 0
 
     with tempfile.TemporaryDirectory(prefix="gamedetect_") as tmp_dir:
-        for t in times:
+        for fi, t in enumerate(times):
             frame_path = os.path.join(tmp_dir, f"f_{frames_used}.jpg")
+            print(
+                f"[game-visual] frame {fi + 1}/{len(times)} extract t={t}s",
+                file=sys.stderr,
+                flush=True,
+            )
             try:
                 extract_frame(video, t, frame_path)
                 import cv2
 
                 frame = cv2.imread(frame_path)
-            except Exception:
+            except Exception as exc:
+                print(
+                    f"[game-visual] frame {fi + 1} extract failed: {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
                 continue
             finally:
                 try:
@@ -349,12 +359,18 @@ def main():
 
             frames_used += 1
             blob_parts = []
-            for roi in HUD_ROIS:
+            for ri, roi in enumerate(HUD_ROIS):
                 patch, roi_name = crop_roi(frame, roi)
                 if patch is None:
                     continue
                 layout_acc[roi_name] += roi_edge_density(patch)
                 text = try_ocr(patch)
+                if ri == 0:
+                    print(
+                        f"[game-visual] frame {fi + 1} OCR roi={roi_name} chars={len(text)}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
                 if text:
                     blob_parts.append(text)
                     if len(text) > 4:

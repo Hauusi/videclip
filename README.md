@@ -4,7 +4,7 @@ YouTube/VOD → AI highlights → vertical clips (Shorts, TikTok, Reels).
 
 > **Living documentation.** This file is the single source of truth for architecture, pipeline behaviour, and production deploy. **Agents must update it in the same session** when adding, removing, or changing features (see `AGENTS.md` and `.cursor/rules/readme-sync.mdc`).
 
-**Last updated:** 2026-06-10 (kill anchor fix)
+**Last updated:** 2026-06-14 (POV from OCR cluster + montage wide-gap fix)
 
 ---
 
@@ -17,7 +17,7 @@ YouTube/VOD → AI highlights → vertical clips (Shorts, TikTok, Reels).
 | Highlights (general) | Anthropic Claude (`CLAUDE_MODEL`, default Sonnet) |
 | STT / captions | Groq Whisper (`GROQ_API_KEY`) |
 | Video | `ffmpeg-static`, hybrid seek for AV1 montage cuts |
-| Shooter HUD | Python 3 + OpenCV + `kill_feed_detect.py` |
+| Shooter HUD | Python 3 + OpenCV + `kill_feed_detect.py` (AV1 → ffmpeg frame extract) |
 | Production | Hetzner VPS `62.238.39.31`, path `/opt/videclip`, systemd `videclip` |
 
 Extended handbook: [`docs/projekt-dokumentation/PEAKCLIP-KOMPLETTUEBERSICHT.md`](docs/projekt-dokumentation/PEAKCLIP-KOMPLETTUEBERSICHT.md)
@@ -98,8 +98,9 @@ audioEnergyScan → hudKillFeed (Python ROI scan) → filterQualityHudKills
 1. **Quality filter** rejects spawn/round-start HUD noise (first ~90s weak `top_right` without OCR)
 2. **`bottom_kills` ROI** = streamer multikill icons (highest trust)
 3. **Chains only** — kills within `HUD_CLUSTER_MAX_GAP_SEC` (18s); **never round-robin across full VOD**
-4. Prefer **3–4 kill** chains; 2-kill chains as fallback
-5. **No kill reused** across clips (`montagesShareKill`)
+4. **POV kills** — Python: red-border feed line + OCR name ≈ POV cluster (`llipeepfan-` variants); **not** YouTube channel/title
+5. Prefer **3–4 kill** chains; 2-kill chains as fallback
+6. **No kill reused** across clips (`montagesShareKill`)
 
 ### Do NOT reintroduce
 
@@ -107,6 +108,7 @@ audioEnergyScan → hudKillFeed (Python ROI scan) → filterQualityHudKills
 - `snapPeakToGunshot` for HUD anchors — shifted cuts before visible kill
 - Auto `viral_score` from segment count only — use `montageViralScore` in `shooterHighlightSelect.js`
 - Skipping `isCoherentKillMontage` for HUD packs
+- `fallback_red_border` in `kill_feed_pipeline.py` — counted every red-border feed line (~3× false kills); use `killer_matches_pov` only
 
 ### Debug logs (production)
 
@@ -117,10 +119,15 @@ ssh -i C:\Users\rapha\.ssh\id_ed25519_hetzner root@62.238.39.31 \
 
 | Log | Healthy signal |
 |-----|----------------|
+| `[kill-feed] POV filter: X kills, Y deaths, Z foreign/skip` | X ≈ POV kill count (~50–70/49min VOD), not ~180 |
+| `[kill-feed] POV skip reasons: {...}` | Most skips should be `not_pov`, not `no_pov` |
 | `[hud-quality] X/Y HUD events pass` | X < Y (noise filtered) |
 | `[montage] HUD chains: … → N clips (4+3+…)` | Mixed kill counts |
 | `HUD montage preview: … peak gaps 5s \| 7s` | Gaps **< 18s**, not 500s |
 | `[cut] montage … 424+3.7s \| 431+3.7s` | Tight local segments |
+| `[kill-feed] force_ffmpeg=True` | AV1 source — cv2 skipped, ffmpeg decodes frames |
+| `[hud-killfeed] funnel: pass1=… kills=…` | pass1 ≈ duration/3; kills > 0 on POV VOD |
+| `[hud-killfeed] WARNING: AV1 decode failure` | Scan crashed — audio fallback only |
 
 ---
 
@@ -184,6 +191,11 @@ npm start
 
 | Date | Change |
 |------|--------|
+| 2026-06-14 | `isCoherentKillMontage` auto-detects wide-gap jump cuts (fixes shooter-select rejecting HUD montages) |
+| 2026-06-14 | POV: OCR cluster only (killer+victim scoring); multi-name match on red-border lines; no YouTube title hints; montage wide-gap coherence fix + sliding fallback |
+| 2026-06-14 | POV matching: `killer_matches_pov` (cluster aliases, peepfan stem, hint suffix); skip-reason logs; no `fallback_red_border` |
+| 2026-06-14 | POV filter: only killer≈POV counts; title/channel name overrides OCR fragment; fallback no longer accepts all feed kills |
+| 2026-06-12 | Kill-feed scan: AV1 sources use ffmpeg per-frame extract (`force_ffmpeg`); distinct AV1 failure WARNING in logs |
 | 2026-06-10 | README rewritten as living doc; shooter pipeline documented |
 | 2026-06-10 | Kill montages: round-robin → `buildSlidingKillChains` + `filterQualityHudKills` |
 | 2026-06-10 | HUD segments anchored on timeline; spawn filter; variable clip length |

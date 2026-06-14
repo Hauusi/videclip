@@ -828,7 +828,7 @@ export function buildKillMontagePacks(events, videoDuration, options = {}) {
   }
 
   const useWideGap = engagements.some((e) => e.player_kill || e.red_highlight || e.validated_by === 'red-highlight');
-  const chains = useWideGap
+  let chains = useWideGap
     ? buildWideGapKillChains(engagements)
     : buildSlidingKillChains(engagements);
 
@@ -840,33 +840,47 @@ export function buildKillMontagePacks(events, videoDuration, options = {}) {
   }
   if (!chains.length) return [];
 
-  const candidates = chains
-    .map((chain) => {
-      const built = buildHudMontageCandidate(chain, videoDuration, options);
-      if (!built || !isCoherentKillMontage(built)) return null;
-      const clusterScore = scoreHudKillCluster(chain);
-      const span = Math.round(chain.span * 10) / 10;
-      const k = built.montage_kill_count || chain.killCount;
-      const fpPenalty = chainFalsePositivePenalty(chain);
-      const score = 90 + k * 34 + clusterScore * 0.65 + Math.min(span, 60) * 0.4 - fpPenalty;
-      return {
-        ...built,
-        clusterScore,
-        flags: ['hud-kills', 'multikill-montage', 'hud-chain'],
-        arcLabel: 'hud-kill-chain',
-        local_score: score,
-        composite: score,
-        excerpt: `${k} kills in ${span}s VOD · ${built.output_duration}s montage`,
-        hypeMoment: k >= 3 && span >= 25,
-      };
-    })
-    .filter(Boolean)
-    .sort((a, b) => {
-      const kA = a.montage_kill_count || 0;
-      const kB = b.montage_kill_count || 0;
-      if (kB !== kA) return kB - kA;
-      return (b.clusterScore || 0) - (a.clusterScore || 0);
-    });
+  const buildCandidates = (chainList, wideGap) =>
+    chainList
+      .map((chain) => {
+        const built = buildHudMontageCandidate(chain, videoDuration, options);
+        if (!built || !isCoherentKillMontage(built, { wideGap })) return null;
+        const clusterScore = scoreHudKillCluster(chain);
+        const span = Math.round(chain.span * 10) / 10;
+        const k = built.montage_kill_count || chain.killCount;
+        const fpPenalty = chainFalsePositivePenalty(chain);
+        const score = 90 + k * 34 + clusterScore * 0.65 + Math.min(span, 60) * 0.4 - fpPenalty;
+        return {
+          ...built,
+          clusterScore,
+          flags: ['hud-kills', 'multikill-montage', 'hud-chain'],
+          arcLabel: 'hud-kill-chain',
+          local_score: score,
+          composite: score,
+          excerpt: `${k} kills in ${span}s VOD · ${built.output_duration}s montage`,
+          hypeMoment: k >= 3 && span >= 25,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => {
+        const kA = a.montage_kill_count || 0;
+        const kB = b.montage_kill_count || 0;
+        if (kB !== kA) return kB - kA;
+        return (b.clusterScore || 0) - (a.clusterScore || 0);
+      });
+
+  let candidates = buildCandidates(chains, useWideGap);
+
+  if (!candidates.length && useWideGap) {
+    const sliding = buildSlidingKillChains(engagements);
+    if (sliding.length) {
+      console.log(
+        `[montage] wide-gap coherence miss — fallback to ${sliding.length} local sliding chains`,
+      );
+      chains = sliding;
+      candidates = buildCandidates(sliding, false);
+    }
+  }
 
   const selected = [];
   const pick = (minKills) => {
@@ -907,14 +921,29 @@ export function buildAllHudMontageCandidates(events, videoDuration, options = {}
     .sort((a, b) => (b.montage_kill_count || 0) - (a.montage_kill_count || 0));
 }
 
-/** Reject montages that jump across the VOD (e.g. kill at 19s then 400s). */
-export function isCoherentKillMontage(candidate) {
+/** True when montage segments are jump-cuts with large source gaps (HUD wide-gap chains). */
+export function montageUsesWideSourceGaps(candidate) {
   const segs = (candidate?.montage_segments || []).filter((s) => s.segment_type !== 'payoff');
   if (segs.length < 2) return false;
   for (let i = 1; i < segs.length; i++) {
     const prev = segs[i - 1].peak_time ?? segs[i - 1].start;
     const curr = segs[i].peak_time ?? segs[i].start;
-    if (curr - prev > MAX_KILL_GAP_IN_MONTAGE_SEC) return false;
+    if (curr - prev > MAX_KILL_GAP_IN_MONTAGE_SEC) return true;
+  }
+  return false;
+}
+
+/** Reject montages that jump across the VOD (e.g. kill at 19s then 400s). */
+export function isCoherentKillMontage(candidate, { wideGap } = {}) {
+  const segs = (candidate?.montage_segments || []).filter((s) => s.segment_type !== 'payoff');
+  if (segs.length < 2) return false;
+  const useWideGap = wideGap ?? montageUsesWideSourceGaps(candidate);
+  if (!useWideGap) {
+    for (let i = 1; i < segs.length; i++) {
+      const prev = segs[i - 1].peak_time ?? segs[i - 1].start;
+      const curr = segs[i].peak_time ?? segs[i].start;
+      if (curr - prev > MAX_KILL_GAP_IN_MONTAGE_SEC) return false;
+    }
   }
   const span =
     (segs[segs.length - 1].peak_time ?? segs[segs.length - 1].start) -
