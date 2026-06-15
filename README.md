@@ -4,7 +4,7 @@ YouTube/VOD → AI highlights → vertical clips (Shorts, TikTok, Reels).
 
 > **Living documentation.** This file is the single source of truth for architecture, pipeline behaviour, and production deploy. **Agents must update it in the same session** when adding, removing, or changing features (see `AGENTS.md` and `.cursor/rules/readme-sync.mdc`).
 
-**Last updated:** 2026-06-14 (POV from OCR cluster + montage wide-gap fix)
+**Last updated:** 2026-06-14 (full kill coverage — every detected kill becomes a clip)
 
 ---
 
@@ -99,8 +99,8 @@ audioEnergyScan → hudKillFeed (Python ROI scan) → filterQualityHudKills
 2. **`bottom_kills` ROI** = streamer multikill icons (highest trust)
 3. **Chains only** — kills within `HUD_CLUSTER_MAX_GAP_SEC` (18s); **never round-robin across full VOD**
 4. **POV kills** — Python: red-border feed line + OCR name ≈ POV cluster (`llipeepfan-` variants); **not** YouTube channel/title
-5. Prefer **3–4 kill** chains; 2-kill chains as fallback
-6. **No kill reused** across clips (`montagesShareKill`)
+5. Prefer **3–4 kill** burst chains; **isolated kills → solo clip** (full coverage)
+6. **Every detected POV kill** is clipped — `partitionKillsIntoBurstPacks` (no 5-clip cap)
 
 ### Do NOT reintroduce
 
@@ -109,6 +109,7 @@ audioEnergyScan → hudKillFeed (Python ROI scan) → filterQualityHudKills
 - Auto `viral_score` from segment count only — use `montageViralScore` in `shooterHighlightSelect.js`
 - Skipping `isCoherentKillMontage` for HUD packs
 - `fallback_red_border` in `kill_feed_pipeline.py` — counted every red-border feed line (~3× false kills); use `killer_matches_pov` only
+- `pov_partial_victim` accept-all on red border — ~52 false kills (enemy names OCR'd as single victim); montage segments then show no frag
 
 ### Debug logs (production)
 
@@ -170,7 +171,7 @@ scp -i C:\Users\rapha\.ssh\id_ed25519_hetzner -r client\dist root@62.238.39.31:/
 scp -i C:\Users\rapha\.ssh\id_ed25519_hetzner server\src\services\*.js root@62.238.39.31:/opt/videclip/server/src/services/
 
 # Python HUD script
-scp -i C:\Users\rapha\.ssh\id_ed25519_hetzner server\scripts\kill_feed_detect.py root@62.238.39.31:/opt/videclip/server/scripts/
+scp -i C:\Users\rapha\.ssh\id_ed25519_hetzner server\scripts\kill_feed_detect.py server\scripts\kill_feed_pipeline.py root@62.238.39.31:/opt/videclip/server/scripts/
 
 # Restart
 ssh -i C:\Users\rapha\.ssh\id_ed25519_hetzner root@62.238.39.31 "systemctl restart videclip"
@@ -191,7 +192,10 @@ npm start
 
 | Date | Change |
 |------|--------|
-| 2026-06-14 | `isCoherentKillMontage` auto-detects wide-gap jump cuts (fixes shooter-select rejecting HUD montages) |
+| 2026-06-14 | POV recall: red-border + foreign killer / victim-only OCR (`pov_foreign_killer_ocr`, `pov_partial_victim_foreign`) |
+| 2026-06-14 | Burst montages only: gap≤22s, span≤55s; anchor raw−1.8s + gunshot snap; no wide-gap chains; pick 4-kill clips first |
+| 2026-06-14 | Revert `pov_partial_victim`; `TRUSTED_POV_REASONS` montage filter; sliding chains before wide-gap; segment 8s (2.5+5.5) + 1.5s anchor lag; red-highlight ignores preset `kill_anchor_time` |
+| 2026-06-14 | POV partial-victim on red border; montage segments 8s (3.5+4.5) + 0.8s anchor lag for visible kill |
 | 2026-06-14 | POV: OCR cluster only (killer+victim scoring); multi-name match on red-border lines; no YouTube title hints; montage wide-gap coherence fix + sliding fallback |
 | 2026-06-14 | POV matching: `killer_matches_pov` (cluster aliases, peepfan stem, hint suffix); skip-reason logs; no `fallback_red_border` |
 | 2026-06-14 | POV filter: only killer≈POV counts; title/channel name overrides OCR fragment; fallback no longer accepts all feed kills |

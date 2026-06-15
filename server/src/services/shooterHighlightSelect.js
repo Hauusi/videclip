@@ -5,7 +5,7 @@ import {
   montagesShareKill,
 } from './montageClip.js';
 
-const MAX_CLIPS = 5;
+const MAX_CLIPS = 99;
 const MIN_CLIPS = 1;
 const LONG_VIDEO_SEC = 600;
 const MIN_SPREAD_SEC = 90;
@@ -115,7 +115,7 @@ export function selectShooterHighlights(candidates, segments, duration, options 
 
   const montages = [...candidates]
     .filter((c) => {
-      if (c.montage_type !== 'shooter_multikill' || c.montage_segments?.length < 2) return false;
+      if (c.montage_type !== 'shooter_multikill' || c.montage_segments?.length < 1) return false;
       return isCoherentKillMontage(c);
     })
     .sort((a, b) => {

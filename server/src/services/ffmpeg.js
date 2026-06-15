@@ -1148,15 +1148,21 @@ export async function cutRawClipWithHook(sourceVideo, highlight, workDir) {
 
 async function cutRawClipWithHookUnlocked(sourceVideo, highlight, workDir) {
   if (!shouldUseColdOpen(highlight)) {
-    if (isMontageHighlight(highlight) && (highlight.montage_segments?.length || 0) < 2) {
-      throw new Error(
-        `Montage highlight ${highlight.id} has no segments — refusing linear VOD span cut`,
-      );
+    if (isMontageHighlight(highlight)) {
+      if (!highlight.montage_segments?.length) {
+        throw new Error(
+          `Montage highlight ${highlight.id} has no segments — refusing linear VOD span cut`,
+        );
+      }
+      const clipPath = await cutMontageClip(sourceVideo, highlight, workDir);
+      const info = await probeClipQuick(clipPath);
+      return {
+        clipPath,
+        hookTeaserMeasuredSec: 0,
+        clipDurationMeasured: info.duration || 0,
+      };
     }
-    const clipPath =
-      highlight.montage_segments?.length >= 2
-        ? await cutMontageClip(sourceVideo, highlight, workDir)
-        : await cutRawClip(sourceVideo, highlight, workDir);
+    const clipPath = await cutRawClip(sourceVideo, highlight, workDir);
     const info = await probeClipQuick(clipPath);
     return {
       clipPath,
@@ -1242,15 +1248,33 @@ async function cutRawClipWithHookUnlocked(sourceVideo, highlight, workDir) {
  */
 export async function cutMontageClip(sourceVideo, highlight, workDir) {
   const segments = highlight.montage_segments;
-  if (!segments?.length || segments.length < 2) {
+  if (!segments?.length) {
     throw new Error(
-      `cutMontageClip: highlight ${highlight.id} needs ≥2 segments (got ${segments?.length || 0})`,
+      `cutMontageClip: highlight ${highlight.id} needs ≥1 segment (got 0)`,
     );
   }
 
   const rawClipsDir = path.join(workDir, 'raw-clips');
   await fs.mkdir(rawClipsDir, { recursive: true });
   const clipPath = path.join(rawClipsDir, `raw_${highlight.id}.mp4`);
+
+  if (segments.length === 1) {
+    const seg = segments[0];
+    console.log(
+      `[cut] single-kill highlight=${highlight.id} ${seg.start.toFixed(1)}+${seg.duration.toFixed(1)}s`,
+    );
+    await cutHighlightClip(sourceVideo, seg.start, seg.duration, clipPath, {
+      forceEncode: true,
+      accurateSeek: true,
+      montagePart: true,
+    });
+    const info = await probeClipQuick(clipPath);
+    if (!info.hasVideo || info.duration < 2) {
+      throw new Error(`cutMontageClip: single-kill output invalid for ${highlight.id}`);
+    }
+    return clipPath;
+  }
+
   const partPaths = [];
 
   console.log(

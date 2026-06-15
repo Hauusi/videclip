@@ -356,7 +356,7 @@ def killer_is_foreign(
         orep = oc["representative"]
         if fuzzy_ratio(orep, pov_rep) >= 0.62:
             continue
-        if oc["count"] < 3:
+        if oc["count"] < 2:
             continue
         if fuzzy_ratio(k, orep) >= 0.82:
             return True
@@ -1031,10 +1031,26 @@ def classify_registry_entry(
         for name in entry_names(entry, fp):
             if name_matches_pov(name, pov_rep, pov_cluster, cfg):
                 return "kill", "pov_partial_any"
+        # Red border + single enemy name = OCR read victim only (common CS2 misread).
+        names = entry_names(entry, fp)
+        if len(names) == 1 and len(names[0]) >= 4:
+            only = names[0]
+            if not name_matches_pov(only, pov_rep, pov_cluster, cfg):
+                if killer_is_foreign(only, pov_cluster, all_clusters, cfg):
+                    return "kill", "pov_partial_victim_foreign"
         return "skip", "partial_not_pov"
 
     if killer and killer_is_foreign(killer, pov_cluster, all_clusters, cfg):
+        if not victim or not name_matches_pov(victim, pov_rep, pov_cluster, cfg):
+            return "kill", "pov_foreign_killer_ocr"
         return "skip", "foreign_killer"
+
+    if killer and not name_matches_pov(killer, pov_rep, pov_cluster, cfg):
+        vk = normalize_name(victim)
+        kk = normalize_name(killer)
+        if len(kk) >= 4 and (not vk or not name_matches_pov(victim, pov_rep, pov_cluster, cfg)):
+            if vk != kk:
+                return "kill", "pov_enemy_killer_field"
 
     for name in entry_names(entry, fp):
         if name_matches_pov(name, pov_rep, pov_cluster, cfg):
@@ -1280,6 +1296,7 @@ def kills_to_legacy_events(kills: list[dict[str, Any]], pov_player: str = "") ->
                 "highlight_color": "red",
                 "method": "two-pass-ocr",
                 "pov_player": pov_player,
+                "pov_reason": k.get("pov_reason", ""),
             }
         )
     return events

@@ -492,7 +492,7 @@ export async function runAnalyzeJob(
       }))
       .filter((h) => {
         if (shooterPipeline) {
-          if (!isMontageHighlight(h) || (h.montage_segments?.length || 0) < 2) {
+          if (!isMontageHighlight(h) || (h.montage_segments?.length || 0) < 1) {
             console.warn(
               `[Pipeline] Dropped non-montage shooter highlight: ${h.id || h.title}`,
             );
