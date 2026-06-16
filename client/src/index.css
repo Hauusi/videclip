@@ -1,3 +1,5 @@
+@import './styles/tokens.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -315,8 +317,14 @@ body {
   }
 
   .projects-grid {
-    @apply grid gap-5 sm:gap-6;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    @apply grid gap-4 sm:gap-5;
+    grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  }
+
+  @media (min-width: 640px) {
+    .projects-grid {
+      grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+    }
   }
 
   .projects-grid-analyzing .home-project-card {
@@ -328,9 +336,22 @@ body {
   }
 
   .project-card-thumb-wrap {
-    @apply relative block w-full overflow-hidden rounded-2xl border aspect-video text-left transition-transform;
+    @apply relative block w-full overflow-hidden rounded-2xl border text-left transition-all duration-200;
+    aspect-ratio: 9 / 16;
     border-color: var(--t-border);
     background: var(--t-elevated);
+  }
+
+  .project-card-thumb-shade {
+    @apply absolute inset-0 pointer-events-none;
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.65) 0%, transparent 50%);
+  }
+
+  .project-card-clips {
+    @apply absolute bottom-2 left-2 text-[10px] font-semibold px-2 py-0.5 rounded-md z-[1];
+    background: rgba(0, 0, 0, 0.55);
+    color: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(4px);
   }
 
   .project-card-thumb-wrap:hover {
@@ -350,10 +371,14 @@ body {
 
   .project-card-expiry,
   .project-card-saved {
-    @apply absolute bottom-2 left-2 text-2xs font-medium px-2 py-1 rounded-md;
-    background: rgba(0, 0, 0, 0.72);
-    color: rgba(255, 255, 255, 0.92);
+    @apply absolute top-2 right-2 text-[10px] font-medium px-2 py-0.5 rounded-md z-[1];
     backdrop-filter: blur(6px);
+  }
+
+  .project-card-expiry {
+    background: rgba(251, 191, 36, 0.22);
+    color: #fde68a;
+    border: 1px solid rgba(251, 191, 36, 0.35);
   }
 
   .project-card-saved {
@@ -387,8 +412,11 @@ body {
     @apply w-full text-left px-3 py-2 text-sm text-theme hover:bg-[color-mix(in_srgb,var(--t-text)_5%,transparent)] transition-colors;
   }
 
-  .projects-empty {
-    @apply py-16;
+  .import-feature-pill {
+    @apply inline-flex items-center gap-1.5 text-xs font-medium rounded-full px-3 py-1.5;
+    color: color-mix(in srgb, var(--t-text) 75%, var(--t-muted));
+    background: color-mix(in srgb, var(--t-text) 4%, transparent);
+    border: 1px solid var(--t-border);
   }
 
   .import-hero {
@@ -396,20 +424,31 @@ body {
   }
 
   .import-hero-content {
-    padding-top: 4.5rem;
-    padding-bottom: 2rem;
+    padding-top: 3.5rem;
+    padding-bottom: 1.5rem;
   }
 
   @media (min-width: 640px) {
     .import-hero-content {
-      padding-top: 5.5rem;
-      padding-bottom: 2.5rem;
+      padding-top: 4.5rem;
+      padding-bottom: 2rem;
     }
   }
 
   @media (min-width: 1024px) {
     .import-hero-content {
-      padding-top: 6.5rem;
+      padding-top: 5rem;
+    }
+  }
+
+  .import-hero-content--with-rail {
+    padding-top: 2.5rem;
+    padding-bottom: 1rem;
+  }
+
+  @media (min-width: 1024px) {
+    .import-hero-content--with-rail {
+      padding-top: 3rem;
     }
   }
 
@@ -462,8 +501,8 @@ body {
   }
 
   .home-project-card {
-    @apply flex flex-col text-left rounded-2xl border overflow-hidden transition-all shrink-0;
-    width: 11.5rem;
+    @apply flex flex-col text-left rounded-2xl border overflow-hidden transition-all duration-200 shrink-0;
+    width: 10.5rem;
     scroll-snap-align: start;
     border-color: var(--t-border);
     background: color-mix(in srgb, var(--t-card) 88%, transparent);
@@ -472,7 +511,7 @@ body {
 
   @media (min-width: 640px) {
     .home-project-card {
-      width: 13.5rem;
+      width: 11.75rem;
     }
   }
 
@@ -485,7 +524,8 @@ body {
   }
 
   .home-project-card-media {
-    @apply relative aspect-video overflow-hidden;
+    @apply relative overflow-hidden;
+    aspect-ratio: 9 / 16;
     background: var(--t-elevated);
   }
 
@@ -508,10 +548,14 @@ body {
   }
 
   .home-project-card-badge {
-    @apply absolute top-2 left-2 text-[10px] font-semibold px-1.5 py-0.5 rounded-md;
-    background: rgba(0, 0, 0, 0.7);
-    color: rgba(255, 255, 255, 0.92);
+    @apply absolute top-2 right-2 text-[10px] font-semibold px-1.5 py-0.5 rounded-md z-[1];
     backdrop-filter: blur(4px);
+  }
+
+  .home-project-card-badge--urgent {
+    background: rgba(251, 191, 36, 0.22);
+    color: #fde68a;
+    border: 1px solid rgba(251, 191, 36, 0.35);
   }
 
   .home-project-card-badge--saved {
@@ -740,9 +784,10 @@ body {
   }
 
   .peak-nav-active {
-    background: color-mix(in srgb, var(--t-text) 6%, transparent);
+    background: color-mix(in srgb, var(--peak) 12%, transparent);
     color: var(--t-text);
-    border: 1px solid var(--t-border);
+    border: 1px solid color-mix(in srgb, var(--peak) 28%, transparent);
+    box-shadow: 0 0 16px rgba(var(--peak-rgb), 0.1);
   }
 
   .peak-nav-idle {
@@ -774,7 +819,7 @@ body {
     box-shadow:
       0 0 0 1px color-mix(in srgb, var(--peak) 10%, transparent),
       0 32px 80px rgba(0, 0, 0, 0.38);
-    @apply rounded-3xl backdrop-blur-2xl overflow-hidden flex flex-col w-full lg:h-full lg:min-h-0;
+    @apply rounded-3xl backdrop-blur-2xl overflow-hidden flex flex-col w-full h-full min-h-0;
   }
   .editor-shell::before {
     content: '';
@@ -800,8 +845,10 @@ body {
   }
 
   .editor-preview-stage {
-    @apply relative flex-1 flex items-center justify-center min-h-[280px] lg:min-h-0 rounded-2xl overflow-hidden;
-    background: color-mix(in srgb, #000 35%, transparent);
+    @apply relative flex flex-col items-center justify-center min-h-[280px] lg:min-h-0 rounded-2xl overflow-hidden gap-3 p-3 sm:p-4;
+    background:
+      radial-gradient(ellipse 80% 60% at 50% 100%, rgba(var(--peak-rgb), 0.08), transparent 70%),
+      color-mix(in srgb, #000 40%, transparent);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--t-text) 6%, transparent);
   }
 
@@ -814,7 +861,366 @@ body {
   }
 
   .editor-preview-frame {
-    @apply relative z-10 w-full flex justify-center;
+    @apply relative z-10 w-full flex justify-center flex-1 min-h-0;
+  }
+
+  .editor-framing-dock {
+    @apply relative z-20 shrink-0 w-full;
+  }
+
+  .framing-toolbar {
+    @apply flex items-stretch gap-1.5 p-1.5 rounded-2xl w-full;
+    background: color-mix(in srgb, var(--surface-1) 92%, transparent);
+    border: 1px solid color-mix(in srgb, var(--t-text) 12%, transparent);
+    backdrop-filter: blur(16px);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+  }
+
+  .framing-toolbar-btn {
+    @apply flex flex-1 flex-col items-center justify-center gap-1.5 px-2 py-2.5 min-h-[3.25rem] rounded-xl transition-all duration-200;
+    color: color-mix(in srgb, var(--t-text) 65%, transparent);
+  }
+
+  .framing-toolbar-btn:hover {
+    color: var(--t-text);
+    background: color-mix(in srgb, var(--t-text) 6%, transparent);
+  }
+
+  .framing-toolbar-btn--active {
+    color: var(--t-text);
+    background: color-mix(in srgb, var(--peak) 18%, transparent);
+    border: 1px solid color-mix(in srgb, var(--peak) 42%, transparent);
+    box-shadow: 0 0 20px rgba(var(--peak-rgb), 0.15);
+  }
+
+  .framing-toolbar-label {
+    @apply text-[10px] font-semibold tracking-wide leading-none whitespace-nowrap;
+  }
+
+  .framing-toolbar--compact {
+    @apply gap-1 p-1 rounded-xl w-auto flex-1 min-w-0;
+  }
+
+  .framing-toolbar--compact .framing-toolbar-btn {
+    @apply flex-none min-h-0 px-2.5 py-2 gap-1 min-w-[3.25rem];
+  }
+
+  .framing-toolbar-label--compact {
+    @apply text-[9px];
+  }
+
+  .framing-editor-row {
+    @apply flex items-stretch gap-2 w-full max-w-[min(100%,440px)] mx-auto;
+  }
+
+  .framing-editor-row-bar {
+    @apply flex-1 min-w-0;
+  }
+
+  .framing-editor-toggle {
+    @apply shrink-0 flex flex-col items-center justify-center gap-1 px-3 py-2 min-w-[3.5rem] rounded-xl border text-[10px] font-semibold transition-all;
+    border-color: color-mix(in srgb, var(--t-text) 12%, transparent);
+    background: color-mix(in srgb, var(--surface-1) 92%, transparent);
+    color: color-mix(in srgb, var(--t-text) 65%, transparent);
+  }
+
+  .framing-editor-toggle:hover {
+    color: var(--t-text);
+    border-color: color-mix(in srgb, var(--peak) 30%, transparent);
+  }
+
+  .framing-editor-toggle--active {
+    color: var(--t-text);
+    border-color: color-mix(in srgb, var(--peak) 42%, transparent);
+    background: color-mix(in srgb, var(--peak) 14%, transparent);
+    box-shadow: 0 0 20px rgba(var(--peak-rgb), 0.12);
+  }
+
+  .editor-timeline {
+    @apply relative z-20 shrink-0 mx-3 sm:mx-4 mb-2 rounded-2xl border overflow-hidden;
+    border-color: color-mix(in srgb, var(--t-text) 10%, transparent);
+    background: color-mix(in srgb, var(--surface-1) 94%, transparent);
+    box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.25);
+  }
+
+  .editor-timeline--collapsed {
+    @apply py-2 px-3;
+  }
+
+  .editor-timeline-expand-btn {
+    @apply w-full text-left text-xs text-theme-muted hover:text-theme transition-colors tabular-nums;
+  }
+
+  .editor-timeline-toolbar {
+    @apply flex flex-wrap items-center gap-1.5 px-2 py-1.5 border-b;
+    border-color: color-mix(in srgb, var(--t-text) 8%, transparent);
+    background: color-mix(in srgb, #000 25%, transparent);
+  }
+
+  .editor-timeline-toolbar-left {
+    @apply flex items-center gap-0.5;
+  }
+
+  .editor-timeline-transport {
+    @apply flex flex-1 items-center justify-center gap-0.5 min-w-0;
+  }
+
+  .editor-timeline-timecode {
+    @apply text-2xs text-theme-muted ml-1.5 hidden xs:inline;
+  }
+
+  .editor-timeline-zoom {
+    @apply flex items-center gap-1.5 shrink-0;
+  }
+
+  .editor-timeline-zoom-icon {
+    @apply text-2xs text-theme-muted w-3 text-center;
+  }
+
+  .editor-timeline-zoom-slider {
+    @apply w-14 sm:w-20 h-1 accent-peak-purple cursor-pointer;
+  }
+
+  .editor-timeline-icon-btn {
+    @apply flex items-center justify-center w-8 h-8 rounded-lg text-theme-muted transition-colors disabled:opacity-35;
+  }
+
+  .editor-timeline-icon-btn:hover:not(:disabled) {
+    @apply text-theme;
+    background: color-mix(in srgb, var(--t-text) 6%, transparent);
+  }
+
+  .editor-timeline-icon-btn--active {
+    @apply text-peak-purple;
+    background: color-mix(in srgb, var(--peak) 12%, transparent);
+  }
+
+  .editor-timeline-body {
+    @apply overflow-x-auto overflow-y-hidden scrollbar-thin max-h-[9.5rem];
+  }
+
+  .editor-timeline-lane--ruler {
+    @apply min-h-0 border-b-0;
+  }
+
+  .editor-timeline-lane--ruler .editor-timeline-ruler {
+    @apply border-b-0;
+  }
+
+  .editor-timeline-ruler {
+    @apply relative h-6 border-b cursor-pointer shrink-0;
+    border-color: color-mix(in srgb, var(--t-text) 6%, transparent);
+    background: color-mix(in srgb, #000 18%, transparent);
+  }
+
+  .editor-timeline-ruler-inner {
+    @apply relative h-full min-w-full;
+  }
+
+  .editor-timeline-ruler-mark {
+    @apply absolute top-0 -translate-x-1/2 text-[9px] text-theme-muted tabular-nums pt-1 pointer-events-none;
+  }
+
+  .editor-timeline-playhead {
+    @apply absolute top-0 bottom-0 w-px bg-white pointer-events-none z-10;
+    box-shadow: 0 0 6px rgba(255, 255, 255, 0.55);
+  }
+
+  .editor-timeline-playhead::before {
+    content: '';
+    @apply absolute -top-0.5 left-1/2 -translate-x-1/2 w-2 h-2 rounded-full bg-white;
+  }
+
+  .editor-timeline-lane {
+    @apply flex items-stretch min-h-[2.25rem] border-b last:border-b-0;
+    border-color: color-mix(in srgb, var(--t-text) 5%, transparent);
+  }
+
+  .editor-timeline-lane-label {
+    @apply shrink-0 w-11 sm:w-12 px-1.5 py-2 text-[9px] font-semibold uppercase tracking-wide text-theme-muted flex items-center;
+  }
+
+  .editor-timeline-track-wrap {
+    @apply relative flex-1 min-w-0 overflow-hidden;
+  }
+
+  .editor-timeline-track {
+    @apply relative h-9;
+  }
+
+  .editor-timeline-track-inner {
+    @apply relative h-full min-w-full;
+  }
+
+  .editor-timeline-clip {
+    @apply absolute top-1 bottom-1 rounded-md border text-left px-1.5 overflow-hidden transition-colors;
+    border-color: color-mix(in srgb, var(--peak) 35%, transparent);
+    background: color-mix(in srgb, var(--peak) 18%, transparent);
+  }
+
+  .editor-timeline-clip--active {
+    border-color: color-mix(in srgb, var(--peak) 55%, transparent);
+    background: color-mix(in srgb, var(--peak) 28%, transparent);
+  }
+
+  .editor-timeline-clip-label {
+    @apply text-[9px] font-semibold text-theme truncate block pointer-events-none relative z-[1];
+  }
+
+  .editor-timeline-clip--editable {
+    @apply cursor-pointer touch-none select-none flex items-center justify-center;
+  }
+
+  .editor-timeline-clip-handle {
+    @apply absolute top-0 bottom-0 w-3 z-30 cursor-ew-resize border-0 p-0 touch-none;
+    background: color-mix(in srgb, #fff 35%, transparent);
+  }
+
+  .editor-timeline-clip-handle:hover {
+    background: color-mix(in srgb, #4ade80 55%, transparent);
+  }
+
+  .editor-timeline-clip-handle--start {
+    @apply left-0 rounded-l-md;
+  }
+
+  .editor-timeline-clip-handle--end {
+    @apply right-0 rounded-r-md;
+  }
+
+  .editor-timeline-track--montage-clips {
+    @apply relative h-11 touch-none select-none;
+  }
+
+  .editor-timeline-thumb-strip {
+    @apply absolute inset-0 opacity-35 overflow-hidden rounded-md pointer-events-none;
+  }
+
+  .editor-timeline-thumb-img {
+    @apply h-full w-full object-cover;
+  }
+
+  .editor-timeline-options {
+    @apply flex flex-wrap items-center gap-2 px-2 py-1 border-b;
+    border-color: color-mix(in srgb, var(--t-text) 6%, transparent);
+    background: color-mix(in srgb, #000 12%, transparent);
+  }
+
+  .editor-timeline-opt-btn {
+    @apply text-2xs font-semibold px-2.5 py-1.5 rounded-lg border transition-colors;
+    border-color: color-mix(in srgb, var(--t-text) 12%, transparent);
+    color: var(--t-muted);
+  }
+
+  .editor-timeline-opt-btn:hover {
+    color: var(--t-text);
+    border-color: color-mix(in srgb, var(--peak) 35%, transparent);
+  }
+
+  .editor-timeline-opt-btn--active {
+    color: var(--t-text);
+    border-color: color-mix(in srgb, var(--peak) 45%, transparent);
+    background: color-mix(in srgb, var(--peak) 12%, transparent);
+  }
+
+  .editor-timeline-volume {
+    @apply flex items-center gap-2;
+  }
+
+  .editor-timeline-audio-wrap {
+    @apply flex items-center min-h-[2.5rem] px-1;
+  }
+
+  .editor-timeline-add-audio {
+    @apply w-full text-left text-2xs font-semibold text-theme-muted hover:text-theme px-2 py-2 rounded-lg border border-dashed transition-colors;
+    border-color: color-mix(in srgb, var(--t-text) 15%, transparent);
+  }
+
+  .editor-timeline-add-audio:hover {
+    border-color: color-mix(in srgb, var(--peak) 35%, transparent);
+    background: color-mix(in srgb, var(--peak) 6%, transparent);
+  }
+
+  .editor-timeline-audio-clip {
+    @apply relative min-w-full;
+  }
+
+  .editor-timeline-audio-clip-inner {
+    @apply flex items-center justify-between gap-2 px-2 py-1 rounded-md border mb-1;
+    border-color: color-mix(in srgb, var(--peak) 35%, transparent);
+    background: color-mix(in srgb, var(--peak) 14%, transparent);
+  }
+
+  .editor-timeline-audio-label {
+    @apply text-2xs font-semibold text-theme truncate;
+  }
+
+  .editor-timeline-audio-remove {
+    @apply w-5 h-5 rounded-md text-theme-muted hover:text-theme text-sm leading-none border-0;
+    background: color-mix(in srgb, var(--t-text) 8%, transparent);
+  }
+
+  .editor-timeline-track--trim {
+    @apply relative h-9 cursor-ew-resize touch-none select-none;
+  }
+
+  .editor-timeline-trim-bg {
+    @apply absolute inset-y-2 inset-x-0 rounded-md;
+    background: color-mix(in srgb, var(--t-text) 8%, transparent);
+  }
+
+  .editor-timeline-trim-range {
+    @apply absolute inset-y-2 rounded-md border;
+    border-color: color-mix(in srgb, #4ade80 45%, transparent);
+    background: color-mix(in srgb, #4ade80 18%, transparent);
+  }
+
+  .editor-timeline-trim-handle {
+    @apply absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-6 rounded-sm z-10;
+    background: #4ade80;
+    box-shadow: 0 0 8px rgba(74, 222, 128, 0.45);
+  }
+
+  .editor-timeline-audio-wave {
+    @apply h-6 min-w-full mx-1 my-1.5 rounded-md opacity-60;
+    background: repeating-linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--peak) 35%, transparent) 0,
+      color-mix(in srgb, var(--peak) 35%, transparent) 2px,
+      transparent 2px,
+      transparent 6px
+    );
+  }
+
+  .editor-framing-badge {
+    @apply absolute top-3 right-3 px-2.5 py-1 rounded-full text-2xs font-semibold uppercase tracking-wide backdrop-blur-md z-20;
+    background: color-mix(in srgb, var(--t-text) 8%, transparent);
+    color: var(--t-muted);
+    border: 1px solid var(--t-border);
+  }
+
+  .editor-framing-badge--live {
+    background: rgba(var(--peak-rgb), 0.2);
+    color: #e8e6ff;
+    border-color: rgba(var(--peak-rgb), 0.4);
+  }
+
+  .editor-framing-badge--preview {
+    background: rgba(251, 191, 36, 0.15);
+    color: #fde68a;
+    border-color: rgba(251, 191, 36, 0.35);
+  }
+
+  .editor-framing-badge--trim {
+    background: rgba(56, 189, 248, 0.15);
+    color: #bae6fd;
+    border-color: rgba(56, 189, 248, 0.35);
+  }
+
+  .editor-framing-badge--raw {
+    background: rgba(52, 211, 153, 0.12);
+    color: #a7f3d0;
+    border-color: rgba(52, 211, 153, 0.3);
   }
 
   .editor-settings-col {
@@ -856,11 +1262,11 @@ body {
   .editor-step-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 6px;
+    gap: 5px;
   }
 
   .editor-step-tile {
-    @apply flex flex-col items-center justify-center gap-1 px-1.5 py-2 rounded-xl text-center transition-all duration-200 border border-transparent min-h-[52px];
+    @apply flex flex-col items-center justify-center gap-0.5 px-1 py-1.5 rounded-xl text-center transition-all duration-200 border border-transparent min-h-[46px];
     background: color-mix(in srgb, var(--t-text) 3%, transparent);
     color: var(--t-muted);
   }
@@ -936,6 +1342,355 @@ body {
     box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.2);
   }
 
+  /* ── Phase 2: Cinema Editor ─────────────────────────────────── */
+  .cinema-editor {
+    @apply flex flex-col h-full min-h-0 max-h-full overflow-hidden;
+  }
+
+  .cinema-editor-header {
+    @apply relative z-10 flex items-start justify-between gap-3 px-4 sm:px-5 py-2.5 border-b shrink-0;
+    border-color: color-mix(in srgb, var(--t-text) 8%, transparent);
+  }
+
+  .cinema-editor-header-main {
+    @apply min-w-0 flex-1;
+  }
+
+  .cinema-editor-header-end {
+    @apply flex items-start gap-2 shrink-0;
+  }
+
+  .cinema-editor-header-actions {
+    @apply flex flex-col items-end gap-1;
+  }
+
+  .cinema-editor-header-btns {
+    @apply flex items-center gap-1.5;
+  }
+
+  .cinema-editor-header-btn {
+    @apply !py-1.5 !px-3 !text-xs !min-h-0 whitespace-nowrap;
+  }
+
+  .cinema-editor-header-links {
+    @apply flex flex-wrap items-center justify-end gap-x-2 gap-y-0.5;
+  }
+
+  .cinema-editor-header-link {
+    @apply text-2xs text-theme-muted hover:text-theme transition-colors p-0 border-0 bg-transparent;
+  }
+
+  .cinema-editor-header-link--accent {
+    @apply text-peak-purple font-semibold;
+  }
+
+  .cinema-editor-body {
+    @apply relative z-10 flex flex-col flex-1 min-h-0 overflow-hidden;
+  }
+
+  .cinema-editor-stage {
+    @apply relative flex-1 min-h-0 flex items-center justify-center px-3 sm:px-5 overflow-hidden;
+    background:
+      radial-gradient(ellipse 80% 55% at 50% 100%, rgba(var(--peak-rgb), 0.08), transparent 70%),
+      color-mix(in srgb, #000 30%, transparent);
+  }
+
+  .cinema-editor-preview-wrap {
+    @apply relative z-10 h-full max-h-full w-full flex items-center justify-center min-h-0;
+  }
+
+  .cinema-editor .preview-chrome {
+    height: 100% !important;
+    max-height: 100% !important;
+    width: auto !important;
+    max-width: 100% !important;
+    aspect-ratio: 9 / 16;
+  }
+
+  .cinema-editor-controls {
+    @apply relative z-20 shrink-0 w-full max-w-[min(100%,440px)] mx-auto px-3 sm:px-5 py-2;
+  }
+
+  .cinema-editor--timeline .cinema-editor-stage {
+    @apply py-1;
+  }
+
+  .cinema-editor--timeline .editor-timeline {
+    @apply mb-2 mx-3 sm:mx-4;
+  }
+
+  .cinema-editor--timeline .editor-timeline-body {
+    max-height: 6.5rem;
+  }
+
+  .cinema-editor-kill-timeline {
+    @apply w-full;
+  }
+
+  .cinema-editor-dock-settings {
+    @apply hidden;
+  }
+
+  .editor-tool-rail {
+    @apply shrink-0 mx-3 sm:mx-4 border-t pb-5;
+    border-color: color-mix(in srgb, var(--t-text) 8%, transparent);
+  }
+
+  .editor-tool-rail-head {
+    @apply flex flex-wrap items-baseline justify-between gap-2 pt-3 pb-2 shrink-0;
+  }
+
+  .editor-tool-rail-hint {
+    @apply text-2xs text-theme-muted;
+  }
+
+  .editor-tool-tabs {
+    @apply flex gap-1.5 overflow-x-auto pb-2 shrink-0 scrollbar-thin;
+  }
+
+  .editor-tool-tab {
+    @apply shrink-0 rounded-xl border px-3 py-2 text-xs font-semibold transition-all;
+    border-color: color-mix(in srgb, var(--t-text) 10%, transparent);
+    color: var(--t-muted);
+    background: color-mix(in srgb, var(--t-text) 3%, transparent);
+  }
+
+  .editor-tool-tab:hover {
+    color: var(--t-text);
+    border-color: color-mix(in srgb, var(--peak) 25%, transparent);
+  }
+
+  .editor-tool-tab--active {
+    color: var(--t-text);
+    border-color: color-mix(in srgb, var(--peak) 40%, transparent);
+    background: color-mix(in srgb, var(--peak) 12%, transparent);
+    box-shadow: 0 0 20px rgba(var(--peak-rgb), 0.12);
+  }
+
+  .editor-tool-panel {
+    @apply rounded-2xl border p-3 sm:p-4;
+    border-color: color-mix(in srgb, var(--t-text) 8%, transparent);
+    background: color-mix(in srgb, var(--surface-1) 88%, transparent);
+  }
+
+  .cinema-editor-dock {
+    @apply relative z-30 shrink-0 m-3 sm:m-4 mt-0 rounded-2xl p-3 space-y-2 backdrop-blur-xl border-t;
+    border-color: color-mix(in srgb, var(--t-text) 8%, transparent);
+    background: color-mix(in srgb, var(--t-card) 92%, transparent);
+    box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.35);
+  }
+
+  .cinema-editor-dock-primary {
+    @apply flex flex-row flex-wrap gap-2;
+  }
+
+  .cinema-editor-dock-primary .peak-btn-secondary,
+  .cinema-editor-dock-primary .peak-btn-primary,
+  .cinema-editor-dock-btn {
+    @apply whitespace-nowrap px-3 sm:px-4 flex-1 sm:flex-none sm:min-w-[8.5rem] sm:max-w-[10.5rem];
+  }
+
+  .cinema-editor-dock-links {
+    @apply flex flex-wrap gap-2 pt-1 pb-0.5;
+  }
+
+  .cinema-editor-dock-link {
+    @apply text-xs px-2.5 py-1.5 rounded-lg peak-option hover:text-theme;
+  }
+
+  .cinema-editor-dock-download {
+    @apply block text-center text-xs text-peak-purple hover:opacity-80 pt-1;
+  }
+
+  .editor-peak-badge {
+    @apply rounded-full border px-2 py-1 text-xs font-semibold backdrop-blur-sm;
+  }
+
+  .settings-sheet-root {
+    @apply fixed inset-0 z-50 flex justify-end;
+  }
+
+  .settings-sheet-backdrop {
+    @apply absolute inset-0 border-0 cursor-default;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(4px);
+  }
+
+  .settings-sheet {
+    @apply relative flex h-full w-full max-w-md flex-col shadow-2xl animate-slide-in-right;
+    background: color-mix(in srgb, var(--surface-1) 96%, transparent);
+    border-left: 1px solid color-mix(in srgb, var(--t-text) 10%, transparent);
+  }
+
+  @media (max-width: 639px) {
+    .settings-sheet {
+      @apply max-w-none rounded-t-3xl mt-auto h-[min(88dvh,720px)] animate-slide-up;
+      border-left: none;
+      border-top: 1px solid color-mix(in srgb, var(--t-text) 10%, transparent);
+    }
+
+    .settings-sheet-root {
+      @apply flex-col justify-end;
+    }
+  }
+
+  .settings-sheet-header {
+    @apply flex items-center justify-between gap-3 px-4 py-4 border-b shrink-0;
+    border-color: color-mix(in srgb, var(--t-text) 8%, transparent);
+  }
+
+  .settings-sheet-title {
+    @apply text-base font-semibold text-theme;
+  }
+
+  .settings-sheet-close {
+    @apply w-9 h-9 rounded-xl flex items-center justify-center text-theme-muted hover:text-theme transition-colors;
+    border: 1px solid color-mix(in srgb, var(--t-text) 8%, transparent);
+  }
+
+  .settings-sheet-body {
+    @apply flex-1 min-h-0 overflow-y-auto p-3;
+  }
+
+  .editor-step-list {
+    @apply space-y-2;
+  }
+
+  .editor-step-list-item {
+    @apply rounded-xl border overflow-hidden;
+    border-color: color-mix(in srgb, var(--t-text) 8%, transparent);
+    background: color-mix(in srgb, var(--t-text) 2%, transparent);
+  }
+
+  .editor-step-list-item--open {
+    border-color: color-mix(in srgb, var(--peak) 28%, transparent);
+  }
+
+  .editor-step-list-trigger {
+    @apply flex w-full items-center gap-3 px-3 py-3 text-left transition-colors;
+  }
+
+  .editor-step-list-trigger:hover {
+    background: color-mix(in srgb, var(--peak) 6%, transparent);
+  }
+
+  .editor-step-list-num {
+    @apply flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold tabular-nums;
+    background: color-mix(in srgb, var(--peak) 14%, transparent);
+    color: rgba(var(--peak-rgb), 0.95);
+  }
+
+  .editor-step-list-text {
+    @apply flex min-w-0 flex-1 flex-col;
+  }
+
+  .editor-step-list-title {
+    @apply text-sm font-semibold text-theme;
+  }
+
+  .editor-step-list-sub {
+    @apply text-2xs text-theme-muted mt-0.5;
+  }
+
+  .editor-step-list-chevron {
+    @apply w-4 h-4 shrink-0 text-theme-muted transition-transform duration-200;
+  }
+
+  .editor-step-list-chevron--open {
+    transform: rotate(180deg);
+  }
+
+  .editor-step-list-panel {
+    @apply border-t px-3 py-3 space-y-3;
+    border-color: color-mix(in srgb, var(--t-text) 6%, transparent);
+  }
+
+  .montage-info-panel {
+    @apply rounded-xl border p-4 space-y-2;
+    border-color: color-mix(in srgb, var(--kill) 28%, transparent);
+    background: color-mix(in srgb, var(--kill) 8%, transparent);
+  }
+
+  .montage-info-panel-head {
+    @apply flex items-start gap-3;
+  }
+
+  .montage-info-panel-icon {
+    @apply flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-base;
+    background: color-mix(in srgb, var(--kill) 16%, transparent);
+  }
+
+  .montage-info-panel-title {
+    @apply text-sm font-semibold text-theme;
+  }
+
+  .montage-info-panel-sub {
+    @apply text-sm text-theme-muted mt-0.5;
+  }
+
+  .kill-timeline {
+    @apply space-y-2;
+  }
+
+  .kill-timeline-track {
+    @apply relative h-3 rounded-full overflow-hidden;
+    background: color-mix(in srgb, var(--t-text) 8%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--t-text) 6%, transparent);
+  }
+
+  .kill-timeline-seg {
+    @apply absolute top-0 bottom-0 min-w-[8px] rounded-sm transition-all;
+    background: color-mix(in srgb, var(--kill) 55%, #065f46);
+    border: 1px solid color-mix(in srgb, var(--kill) 70%, transparent);
+  }
+
+  .kill-timeline-seg:hover {
+    filter: brightness(1.12);
+  }
+
+  .kill-timeline-seg--active {
+    background: color-mix(in srgb, var(--kill) 85%, #34d399);
+    box-shadow: 0 0 12px color-mix(in srgb, var(--kill) 45%, transparent);
+  }
+
+  .kill-timeline-seg-label {
+    @apply sr-only;
+  }
+
+  .kill-timeline-labels {
+    @apply flex flex-wrap gap-x-3 gap-y-1;
+  }
+
+  .kill-timeline-time {
+    @apply text-[10px] tabular-nums text-theme-muted;
+  }
+
+  @keyframes slideInRight {
+    from {
+      transform: translateX(100%);
+    }
+    to {
+      transform: translateX(0);
+    }
+  }
+
+  @keyframes slideUp {
+    from {
+      transform: translateY(100%);
+    }
+    to {
+      transform: translateY(0);
+    }
+  }
+
+  .animate-slide-in-right {
+    animation: slideInRight 0.28s var(--ease-out) both;
+  }
+
+  .animate-slide-up {
+    animation: slideUp 0.32s var(--ease-out) both;
+  }
+
   .editor-back-pill {
     @apply inline-flex items-center gap-2 px-3 py-2 rounded-full text-sm font-medium transition-all;
     background: color-mix(in srgb, var(--t-card) 65%, transparent);
@@ -952,6 +1707,446 @@ body {
     @apply relative h-12 rounded-2xl touch-none select-none overflow-hidden;
     background: color-mix(in srgb, var(--t-text) 4%, transparent);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--t-text) 6%, transparent);
+  }
+
+  /* ── Phase 0: Clip feed + project tiles + preview chrome ─────── */
+  .clip-feed-grid {
+    @apply grid gap-4 w-full;
+    grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  }
+
+  @media (min-width: 640px) {
+    .clip-feed-grid {
+      grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .clip-feed-grid {
+      grid-template-columns: repeat(auto-fill, minmax(156px, 1fr));
+      gap: 1.125rem;
+    }
+  }
+
+  .clip-feed-grid .clip-tile {
+    animation: clipTileIn 0.42s var(--ease-out) both;
+  }
+
+  @keyframes clipTileIn {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .clip-feed {
+    @apply space-y-4 pt-2;
+  }
+
+  .clip-feed-header {
+    @apply flex flex-wrap items-end justify-between gap-4;
+  }
+
+  .clip-feed-toolbar {
+    @apply flex flex-wrap items-center gap-2 gap-y-2 pb-1;
+  }
+
+  .clip-feed-toolbar-group {
+    @apply flex flex-wrap items-center gap-2;
+  }
+
+  .clip-feed-empty {
+    @apply mt-2;
+  }
+
+  /* ── Phase 1: Home bento + library ─────────────────────────── */
+  .home-workspace {
+    @apply min-h-0;
+  }
+
+  .home-bento::before {
+    content: '';
+    display: block;
+    height: 1px;
+    margin: 0 1rem 1.5rem;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, var(--t-border-strong) 70%, rgba(var(--peak-rgb), 0.25)),
+      transparent
+    );
+  }
+
+  .home-bento-grid {
+    @apply grid gap-4 lg:gap-5;
+    grid-template-columns: 1fr;
+  }
+
+  @media (min-width: 1024px) {
+    .home-bento-grid {
+      grid-template-columns: 1fr minmax(240px, 320px);
+    }
+  }
+
+  .home-bento-panel {
+    @apply rounded-2xl border p-4 sm:p-5;
+    border-color: var(--t-border);
+    background: color-mix(in srgb, var(--surface-1) 88%, transparent);
+  }
+
+  .home-bento-head {
+    @apply flex items-end justify-between gap-4 mb-4;
+  }
+
+  .home-bento-rail {
+    @apply flex gap-3 overflow-x-auto pb-1 -mx-1 px-1;
+    scroll-snap-type: x proximity;
+  }
+
+  .home-bento-panel--status .home-project-card,
+  .home-bento-panel--status .home-project-card--analyzing {
+    @apply w-full max-w-none;
+  }
+
+  .library-view {
+    @apply w-full max-w-[1400px] mx-auto px-4 sm:px-6 pt-16 sm:pt-20 pb-8 sm:pb-10 space-y-5;
+  }
+
+  .library-view-header {
+    @apply flex flex-wrap items-start justify-between gap-4;
+  }
+
+  .library-view-controls {
+    @apply flex flex-col sm:flex-row sm:items-center gap-3;
+  }
+
+  .library-search-wrap {
+    @apply relative flex-1 min-w-0 max-w-md;
+  }
+
+  .library-search-icon {
+    @apply absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none;
+    color: var(--t-muted);
+  }
+
+  .library-search-input {
+    @apply w-full rounded-xl border py-2.5 pl-9 pr-3 text-sm text-theme outline-none transition-colors;
+    border-color: var(--t-border);
+    background: color-mix(in srgb, var(--surface-1) 90%, transparent);
+  }
+
+  .library-search-input:focus {
+    border-color: var(--accent-border);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--peak) 12%, transparent);
+  }
+
+  .library-sort-wrap {
+    @apply flex items-center gap-2 shrink-0;
+  }
+
+  .library-sort-select {
+    @apply rounded-xl border py-2 px-3 text-sm text-theme outline-none cursor-pointer;
+    border-color: var(--t-border);
+    background: color-mix(in srgb, var(--surface-1) 90%, transparent);
+  }
+
+  .library-tabs {
+    @apply flex flex-wrap gap-6 border-b;
+    border-color: var(--t-border);
+  }
+
+  .library-tab {
+    @apply pb-3 text-sm font-medium transition-colors relative;
+    color: var(--t-muted);
+  }
+
+  .library-tab--active {
+    color: var(--t-text);
+  }
+
+  .library-tab--active::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -1px;
+    height: 2px;
+    background: rgba(var(--peak-rgb), 0.85);
+    border-radius: 2px 2px 0 0;
+  }
+
+  .library-grid {
+    @apply grid gap-4 sm:gap-5;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  }
+
+  @media (min-width: 640px) {
+    .library-grid {
+      grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+    }
+  }
+
+  .library-empty {
+    @apply py-12 text-center;
+  }
+
+  .library-grid-analyzing .home-project-card {
+    @apply w-full h-full min-h-[220px];
+  }
+
+  .project-tile-thumb--video {
+    @apply opacity-0 transition-opacity duration-200;
+  }
+
+  .project-tile-thumb--video.project-tile-thumb--playing,
+  .project-tile-media:hover .project-tile-thumb--video {
+    @apply opacity-100;
+  }
+
+  .project-tile-thumb--poster {
+    @apply absolute inset-0 h-full w-full object-cover z-[1] transition-opacity duration-200;
+  }
+
+  .project-tile-media:hover .project-tile-thumb--poster {
+    @apply opacity-0;
+  }
+
+  .clip-tile {
+    @apply flex flex-col overflow-hidden rounded-2xl border transition-all duration-200;
+    border-color: var(--t-border);
+    background: var(--surface-1);
+  }
+
+  .clip-tile:hover {
+    border-color: var(--accent-border);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.28), 0 0 0 1px rgba(var(--peak-rgb), 0.1);
+    transform: translateY(-2px);
+  }
+
+  .clip-tile-media {
+    @apply relative overflow-hidden;
+    aspect-ratio: 9 / 16;
+    background: #000;
+  }
+
+  .clip-tile-video {
+    @apply absolute inset-0 h-full w-full object-cover transition-transform duration-300;
+  }
+
+  .clip-tile:hover .clip-tile-video {
+    transform: scale(1.03);
+  }
+
+  .clip-tile-video--empty {
+    background: var(--surface-2);
+    animation: pulseSoft 2s ease-in-out infinite;
+  }
+
+  .clip-tile-shade {
+    @apply pointer-events-none absolute inset-0;
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.75) 0%, transparent 52%);
+  }
+
+  .clip-tile-kills {
+    @apply absolute bottom-2 left-2 z-10 rounded-md px-2 py-0.5 text-[10px] font-bold tracking-wide;
+    background: var(--kill-muted);
+    color: var(--kill);
+    border: 1px solid color-mix(in srgb, #34d399 35%, transparent);
+  }
+
+  .clip-tile-score {
+    @apply absolute top-2 right-2 z-10 rounded-lg border px-2 py-0.5 text-[10px] font-bold backdrop-blur-sm;
+  }
+
+  .clip-tile-duration {
+    @apply absolute bottom-2 right-2 z-10 rounded-md px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-white;
+    background: rgba(0, 0, 0, 0.55);
+  }
+
+  .clip-tile-hint {
+    @apply absolute inset-x-2 bottom-10 z-10 rounded py-1 text-center text-[10px] text-amber-200/90;
+    background: rgba(0, 0, 0, 0.5);
+  }
+
+  .clip-tile-actions {
+    @apply absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/50 opacity-0 backdrop-blur-[2px] transition-opacity duration-200;
+  }
+
+  .clip-tile-actions--visible {
+    @apply opacity-100;
+  }
+
+  .clip-tile-btn {
+    @apply rounded-xl px-4 py-2 text-xs font-semibold transition-transform;
+  }
+
+  .clip-tile-btn--primary {
+    @apply bg-peak-gradient text-white shadow-glow;
+  }
+
+  .clip-tile-btn--secondary {
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    color: #fff;
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .clip-tile-body {
+    @apply flex flex-col gap-1.5 p-3;
+  }
+
+  .clip-tile-title {
+    @apply line-clamp-2 text-sm font-semibold leading-snug text-theme;
+  }
+
+  .clip-tile:hover .clip-tile-title {
+    color: rgba(var(--peak-rgb), 0.95);
+  }
+
+  .clip-tile-meta {
+    @apply text-2xs tabular-nums text-theme-muted;
+  }
+
+  .clip-tile-tags {
+    @apply flex flex-wrap gap-1;
+  }
+
+  .clip-tile-tag {
+    @apply rounded-md border border-peak-purple/20 bg-peak-purple/10 px-1.5 py-0.5 text-[10px] text-peak-purple;
+  }
+
+  .clip-tile-tag--muted {
+    @apply border-white/10 bg-white/5 text-theme-muted;
+  }
+
+  .project-tile {
+    @apply text-left transition-all duration-200;
+  }
+
+  .project-tile--rail {
+    @apply flex w-[10.5rem] shrink-0 flex-col overflow-hidden rounded-2xl border sm:w-[11.75rem];
+    border-color: var(--t-border);
+    background: color-mix(in srgb, var(--surface-1) 92%, transparent);
+  }
+
+  .project-tile--rail:hover {
+    border-color: var(--accent-border);
+    transform: translateY(-3px);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
+  }
+
+  .project-tile--grid {
+    @apply flex flex-col gap-2;
+  }
+
+  .project-tile-hit {
+    @apply block w-full overflow-hidden rounded-2xl border text-left transition-all duration-200;
+    aspect-ratio: 9 / 16;
+    border-color: var(--t-border);
+    background: var(--surface-2);
+  }
+
+  .project-tile--grid:hover .project-tile-hit {
+    border-color: var(--accent-border);
+    transform: translateY(-2px);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+  }
+
+  .project-tile-media {
+    @apply relative h-full w-full overflow-hidden;
+  }
+
+  .project-tile--rail .project-tile-media {
+    aspect-ratio: 9 / 16;
+  }
+
+  .project-tile-thumb {
+    @apply h-full w-full object-cover transition-transform duration-300;
+  }
+
+  .project-tile--rail:hover .project-tile-thumb,
+  .project-tile--grid:hover .project-tile-thumb {
+    transform: scale(1.04);
+  }
+
+  .project-tile-thumb--empty {
+    @apply flex h-full items-center justify-center text-2xl text-theme-muted;
+    background: color-mix(in srgb, var(--t-text) 5%, var(--surface-2));
+  }
+
+  .project-tile-shade {
+    @apply pointer-events-none absolute inset-0;
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.55) 0%, transparent 55%);
+  }
+
+  .project-tile-clips {
+    @apply absolute bottom-2 left-2 z-[1] rounded-md px-2 py-0.5 text-[10px] font-semibold text-white;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(4px);
+  }
+
+  .project-tile-badge {
+    @apply absolute top-2 z-[1] rounded-md px-1.5 py-0.5 text-[10px] font-semibold;
+  }
+
+  .project-tile-badge--urgent {
+    right: 0.5rem;
+    background: rgba(251, 191, 36, 0.22);
+    color: #fde68a;
+    border: 1px solid rgba(251, 191, 36, 0.35);
+  }
+
+  .project-tile-badge--saved {
+    right: 0.5rem;
+    background: rgba(var(--peak-rgb), 0.82);
+    color: #fff;
+  }
+
+  .project-tile-body {
+    @apply space-y-0.5 px-3 py-2.5;
+  }
+
+  .project-tile-footer {
+    @apply flex items-start gap-2;
+  }
+
+  .project-tile-title {
+    @apply truncate text-sm font-semibold leading-snug text-theme;
+  }
+
+  .project-tile-title--btn {
+    @apply min-w-0 flex-1 text-left transition-colors hover:text-peak-purple;
+  }
+
+  .project-tile-meta {
+    @apply truncate text-2xs text-theme-muted;
+  }
+
+  .project-tile-meta--footer {
+    @apply px-0.5;
+  }
+
+  .project-tile-menu-btn {
+    @apply flex h-8 w-8 items-center justify-center rounded-lg text-theme-muted transition-colors hover:bg-[color-mix(in_srgb,var(--t-text)_6%,transparent)] hover:text-theme;
+  }
+
+  .preview-chrome {
+    @apply relative overflow-hidden;
+  }
+
+  .preview-chrome-stage {
+    @apply relative h-full w-full;
+  }
+
+  .preview-chrome-badge {
+    @apply absolute right-3 top-3 z-20;
+  }
+
+  .preview-chrome-topleft {
+    @apply absolute left-3 top-3 z-20;
   }
 }
 

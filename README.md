@@ -4,7 +4,7 @@ YouTube/VOD → AI highlights → vertical clips (Shorts, TikTok, Reels).
 
 > **Living documentation.** This file is the single source of truth for architecture, pipeline behaviour, and production deploy. **Agents must update it in the same session** when adding, removing, or changing features (see `AGENTS.md` and `.cursor/rules/readme-sync.mdc`).
 
-**Last updated:** 2026-06-14 (full kill coverage — every detected kill becomes a clip)
+**Last updated:** 2026-06-12 (Montage kill-2 playback — active segment tracking)
 
 ---
 
@@ -56,7 +56,7 @@ Download → Transcript (YouTube or Groq STT) → Category (gameCategory + visua
 | Category | `gameCategory.js`, `gameVisualDetect.js` | CS2 → `shooter` profile |
 | Highlights | `claude.js`, `highlightCandidates.js` | Shooter bypasses linear Claude clips |
 | Cut | `ffmpeg.js` | `cutMontageClip()` for jump-cut montages |
-| Render | `ffmpeg.js`, `captionPipeline.js` | Montage clips skip caption burn |
+| Render | `ffmpeg.js`, `smartCrop.js`, `captionPipeline.js` | Landscape 9:16: blur-letterbox (full gameplay width); montage clips skip caption burn |
 
 ---
 
@@ -83,6 +83,7 @@ audioEnergyScan → hudKillFeed (Python ROI scan) → filterQualityHudKills
 | `server/src/services/highlightCandidates.js` | `injectHudMontageCandidates` |
 | `server/src/services/shooterHighlightSelect.js` | Pick 5 montages, dedupe by kill time |
 | `server/src/services/ffmpeg.js` | `cutMontageClip`, hybrid seek per segment |
+| `server/src/services/smartCrop.js` | 9:16 framing: **Wide** = 16:9 + blur; **Crop** = 4:3 + blur; **Fill** = classic center 9:16 strip |
 
 ### Timing (HUD kill segment)
 
@@ -110,6 +111,9 @@ audioEnergyScan → hudKillFeed (Python ROI scan) → filterQualityHudKills
 - Skipping `isCoherentKillMontage` for HUD packs
 - `fallback_red_border` in `kill_feed_pipeline.py` — counted every red-border feed line (~3× false kills); use `killer_matches_pov` only
 - `pov_partial_victim` accept-all on red border — ~52 false kills (enemy names OCR'd as single victim); montage segments then show no frag
+- Narrow center crop for landscape 9:16 (`cropH=full, cropW=H*9/16`) — cuts off FPS weapon model; use blur-letterbox in `smartCrop.js`
+- Debug kill-export panel in main UI without `?debug=1` — use `isDebugUiEnabled()` only
+- `gameplayFraming` in `structuralSettingsKey` — triggers FFmpeg preview on toggle; framing is client CSS on raw clip
 
 ### Debug logs (production)
 
@@ -158,6 +162,33 @@ Inspect HUD-detected kills per shooter analyze job. **Remove when done** — see
 
 Enabled by default. Disable: `DEBUG_KILL_EXPORT=0` in server `.env`.
 
+**Client debug UI** (kill-export links in clip feed): only with `?debug=1` in the URL (`client/src/utils/debugUi.js`).
+
+---
+
+## Client UI (redesign)
+
+Shared components for the redesign; further phases build on these without changing pipeline behaviour.
+
+| Piece | Path |
+|-------|------|
+| Design tokens | `client/src/styles/tokens.css` |
+| Clip feed tile | `client/src/components/clip/ClipTile.jsx` |
+| Project card (rail + grid) | `client/src/components/project/ProjectTile.jsx` |
+| Editor preview frame | `client/src/components/editor/PreviewChrome.jsx` |
+| Wide / Crop / Fill bar | `client/src/components/editor/FramingBar.jsx` |
+| Framing + Editor toggle row | `client/src/components/editor/FramingEditorRow.jsx` |
+| Bottom editor timeline | `client/src/components/editor/EditorTimeline.jsx` |
+| Settings sheet + step list | `client/src/components/editor/SettingsSheet.jsx`, `EditorStepList.jsx` |
+| Inline tool rail (editor) | `client/src/components/editor/EditorToolRail.jsx` |
+| Montage info panel | `client/src/components/editor/MontageInfoPanel.jsx` |
+| View resolver | `client/src/utils/appViews.js` |
+| Home Bento | `client/src/views/HomeWorkspace.jsx` |
+| Clip feed | `client/src/views/ClipFeed.jsx` |
+| Bibliothek | `client/src/views/LibraryView.jsx` |
+
+Sidebar: **Start** (Import + Bento), **Bibliothek** (Suche, Sort, Filter). Clip-Feed: TikTok-Grid mit Sort (Score/Kills/Dauer). Editor: Preview + kompakte **Wide/Crop/Fill** + **Editor**-Toggle → volle **Timeline** (Trim/Split/Transport, Kill-Clips per Drag, Audio-Spur); Export-Dock unten.
+
 ---
 
 ## Production deploy
@@ -192,6 +223,21 @@ npm start
 
 | Date | Change |
 |------|--------|
+| 2026-06-12 | **UI:** Montage-Live-Preview — aktiver Kill-Index beim Segmentwechsel (überlappende Source-Zeiten); Playhead/Video bleiben auf Kill 2 statt zurück auf Kill 1 |
+| 2026-06-12 | **UI:** Timeline-Ruler und Kill-Spur gleiche Spaltenbreite (Label-Gutter) — 0:00 oben = Clip-Start unten |
+| 2026-06-12 | **UI:** Montage-Timeline — äußere Griffe (Kill 1 links, letzter Kill rechts) per Pixel-Delta statt geklemmter Timeline-Position; kein Festhängen am Rand |
+| 2026-06-12 | **UI:** Montage-Editor — Live-Preview aus Quell-VOD mit Jump-Cuts (Segment-Länge in Timeline = sofort abspielbar); Export nutzt `montage_segments` |
+| 2026-06-12 | **UI Phase 2d:** Timeline nur bei **Editor**-Klick; Werkzeug-Tabs entfernt; Trim-Toolbar über Timeline; Montage-Kills als separate ziehbare Clips (`montage_segments` → Export); Audio-Spur (+ Musik) |
+| 2026-06-12 | **UI Phase 2c:** `EditorTimeline` unten (Ruler, Playhead, Trim-Griffe, Split, Transport, Zoom; Montage-Kill-Spur); `FramingEditorRow` (kompakte Wide/Crop/Fill + Editor-Toggle); schmalere Export-Buttons |
+| 2026-06-12 | **UI Phase 2b:** Editor — `EditorToolRail` inline; FramingBar eigene Zone (kein Clip), Preview-Höhe begrenzt |
+| 2026-06-12 | **UI Phase 2:** Cinema Editor — single-column preview, Kill-Timeline, export dock, „Peak Score“ |
+| 2026-06-12 | **UI Phase 1:** `HomeWorkspace` (Bento), `ClipFeed` (Filter + Sort Kills/Dauer), `LibraryView` (Suche/Sort/Filter), `projectMetaLine` mit Kills/Dauer, Projekt-Hover-Play |
+| 2026-06-12 | **UI Phase 0:** `tokens.css`, `ClipTile`, `ProjectTile`, `PreviewChrome`, `FramingBar`; `appViews` + `data-app-view`; debug panel gated on `?debug=1`; sidebar **Bibliothek** |
+| 2026-06-12 | Gameplay framing (Wide/Crop/9:16): **client CSS on raw clip** — toggle does not trigger FFmpeg preview; export still bakes framing |
+| 2026-06-12 | Third gameplay framing **Fill** (`9:16`): classic center strip (full height, no blur); Wide/Crop unchanged |
+| 2026-06-12 | Crop framing: center **4:3** gameplay + blur letterbox (not full 16:9, not narrow 9:16 strip); preview + FFmpeg export |
+| 2026-06-15 | Fix Crop preview: explicit center-crop transform (316% width on 16:9); zoom fallback on baked 9:16 overview |
+| 2026-06-15 | Fix blur-letterbox FFmpeg graph: output pad `[bg]` must not be comma-separated (was `Filter not found`) |
 | 2026-06-14 | POV recall: red-border + foreign killer / victim-only OCR (`pov_foreign_killer_ocr`, `pov_partial_victim_foreign`) |
 | 2026-06-14 | Burst montages only: gap≤22s, span≤55s; anchor raw−1.8s + gunshot snap; no wide-gap chains; pick 4-kill clips first |
 | 2026-06-14 | Revert `pov_partial_victim`; `TRUSTED_POV_REASONS` montage filter; sliding chains before wide-gap; segment 8s (2.5+5.5) + 1.5s anchor lag; red-highlight ignores preset `kill_anchor_time` |

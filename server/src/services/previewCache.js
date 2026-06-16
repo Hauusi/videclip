@@ -418,6 +418,7 @@ export async function runTieredPreview({
     colorGrade: settings.colorGrade === true,
     aiStrength: settings.aiStrength ?? 75,
     ctaText: String(settings.ctaText ?? '').trim(),
+    gameplayFraming: settings.gameplayFraming || previewRender.gameplayFraming || 'wide',
     preview: true,
     outputName,
     cachePaths: { pass1: pass1Path, pass2: pass2Path, preMusic: preMusicPath },

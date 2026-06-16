@@ -1,9 +1,5 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import HighlightCard from './components/HighlightCard';
-import HighlightOverviewCard from './components/HighlightOverviewCard';
-// DEBUG_KILL_EXPORT START
-import DebugKillExportPanel from './components/DebugKillExportPanel.jsx';
-// DEBUG_KILL_EXPORT END
 import Toast from './components/Toast';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { useProjects } from './hooks/useProjects';
@@ -11,7 +7,6 @@ import {
   isValidYouTubeUrl,
   youtubeVideoId,
   isAcceptedVideoFile,
-  PLATFORMS,
   formatDetectedGame,
 } from './utils/helpers';
 import {
@@ -30,13 +25,16 @@ import { useTheme } from './hooks/useTheme';
 import CookiesExpiredModal from './components/CookiesExpiredModal';
 import AppSidebar from './components/layout/AppSidebar';
 import AnalyzeTopBar from './components/layout/AnalyzeTopBar';
-import ImportHero from './components/layout/ImportHero';
 import AnalyzingWorkspace from './components/layout/AnalyzingWorkspace';
 import AnalysisFooter from './components/layout/AnalysisFooter';
 import MobileBottomBar from './components/layout/MobileBottomBar';
 import HeroBackdrop from './components/layout/HeroBackdrop';
 import PeakClipLogo from './components/brand/PeakClipLogo';
-import ProjectsDashboard from './components/projects/ProjectsDashboard';
+import HomeWorkspace from './views/HomeWorkspace';
+import ClipFeed from './views/ClipFeed';
+import LibraryView from './views/LibraryView';
+import { resolveAppView } from './utils/appViews';
+import { isDebugUiEnabled } from './utils/debugUi';
 
 const DEFAULT_PREFS = {
   captions: true,
@@ -72,8 +70,6 @@ export default function App() {
   const [job, setJob] = useState(null);
   const [result, setResult] = useState(null);
   const [urlError, setUrlError] = useState('');
-  const [platformFilter, setPlatformFilter] = useState('all');
-  const [sortByScore, setSortByScore] = useState(true);
   const [toasts, setToasts] = useState([]);
   const [readyClips, setReadyClips] = useState({});
   const [cookiesModalOpen, setCookiesModalOpen] = useState(false);
@@ -322,16 +318,7 @@ export default function App() {
     [result?.contentGame],
   );
 
-  const highlights = useMemo(() => {
-    let list = result?.highlights || [];
-    if (platformFilter !== 'all') {
-      list = list.filter((h) => h.platform_fit?.includes(platformFilter));
-    }
-    if (sortByScore) {
-      list = [...list].sort((a, b) => b.viral_score - a.viral_score);
-    }
-    return list;
-  }, [result, platformFilter, sortByScore]);
+  const highlights = result?.highlights || [];
 
   const editingHighlight = useMemo(
     () => highlights.find((h) => h.id === editingHighlightId) || null,
@@ -451,6 +438,12 @@ export default function App() {
     !isEditView && (result || showAnalyzingWorkspace) && activeView === 'clips';
 
   const recentProjects = projects.slice(0, 6);
+  const appView = resolveAppView({
+    activeView,
+    editingHighlightId,
+    result,
+  });
+  const showDebugUi = isDebugUiEnabled();
 
   const analyzeProps = {
     url,
@@ -520,16 +513,17 @@ export default function App() {
 
         <div className="relative z-10 flex flex-1 min-h-0">
           <main
-            className={`flex-1 min-w-0 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-thin ${
+            data-app-view={appView}
+            className={`flex-1 min-w-0 min-h-0 overflow-hidden scrollbar-thin ${
               isEditView
-                ? 'flex flex-col p-3 sm:p-4 lg:p-6 lg:overflow-hidden'
+                ? 'flex flex-col p-3 sm:p-4 lg:p-6'
                 : showImportHero
-                  ? 'flex flex-col'
-                  : ''
+                  ? 'flex flex-col overflow-y-auto'
+                  : 'overflow-y-auto'
             }`}
           >
             {isEditView ? (
-              <section className="flex flex-col w-full max-w-[1600px] mx-auto lg:flex-1 lg:min-h-0">
+              <section className="flex flex-col w-full max-w-[1600px] mx-auto flex-1 min-h-0 h-full">
                 <div className="hidden lg:flex shrink-0 mb-3">
                   <button
                     type="button"
@@ -542,7 +536,7 @@ export default function App() {
                     Zurück zu Clips
                   </button>
                 </div>
-                <div className="lg:flex-1 lg:min-h-0">
+                <div className="flex-1 min-h-0 h-full">
                   <HighlightCard
                     key={editingHighlight.id}
                     highlight={editingHighlight}
@@ -575,7 +569,7 @@ export default function App() {
                 </div>
               </section>
             ) : showProjects ? (
-              <ProjectsDashboard
+              <LibraryView
                 projects={projects}
                 savedProjects={savedProjects}
                 loading={projectsLoading}
@@ -600,7 +594,7 @@ export default function App() {
               />
             ) : (
               <>
-                {showImportHero && <ImportHero {...analyzeProps} />}
+                {showImportHero && <HomeWorkspace {...analyzeProps} />}
 
                 {showAnalyzingWorkspace && (
                   <AnalyzingWorkspace
@@ -625,72 +619,15 @@ export default function App() {
                 )}
 
                 {result && (
-                  <section className="space-y-5 px-4 lg:px-6 pb-6 max-w-[1600px] mx-auto w-full animate-fade-in">
-                    <div className="flex flex-wrap items-end justify-between gap-4 pt-2">
-                      <div>
-                        <h2 className="text-xl font-bold text-theme tracking-tight">
-                          Deine Clips
-                          <span className="ml-2 text-peak-purple font-semibold">({highlights.length})</span>
-                        </h2>
-                        <p className="text-sm text-theme-muted mt-1">
-                          KI-ausgewählte Highlights — bearbeiten für Hook, Untertitel & Export
-                        </p>
-                      </div>
-                      <div className="flex flex-wrap gap-2 items-center">
-                        <span className="type-label mr-1 hidden sm:inline">Filter</span>
-                        <button
-                          type="button"
-                          onClick={() => setPlatformFilter('all')}
-                          className={`peak-chip ${platformFilter === 'all' ? 'peak-chip-active' : ''}`}
-                        >
-                          Alle
-                        </button>
-                        {PLATFORMS.map((p) => (
-                          <button
-                            key={p.id}
-                            type="button"
-                            onClick={() =>
-                              setPlatformFilter((f) => (f === p.id ? 'all' : p.id))
-                            }
-                            className={`peak-chip ${platformFilter === p.id ? 'peak-chip-active' : ''}`}
-                          >
-                            {p.icon} {p.label}
-                          </button>
-                        ))}
-                        <button
-                          type="button"
-                          onClick={() => setSortByScore(!sortByScore)}
-                          className={`peak-chip ${sortByScore ? 'peak-chip-active' : ''}`}
-                        >
-                          {sortByScore ? '★ Score' : '↕ Reihenfolge'}
-                        </button>
-                        {highlights.length > 0 && (
-                          <button
-                            type="button"
-                            onClick={handleDownloadAll}
-                            className="peak-btn-primary !py-2 !px-4 !text-sm"
-                          >
-                            ↓ ZIP Export
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* DEBUG_KILL_EXPORT — remove with DebugKillExportPanel.jsx */}
-                    <DebugKillExportPanel debugKillExport={result.debugKillExport} />
-
-                    <div className="grid grid-cols-1 min-[420px]:grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 justify-items-stretch items-stretch w-full">
-                      {highlights.map((h, i) => (
-                        <HighlightOverviewCard
-                          key={h.id}
-                          highlight={h}
-                          index={i}
-                          onEdit={setEditingHighlightId}
-                          detectedGame={detectedGame}
-                        />
-                      ))}
-                    </div>
-                  </section>
+                  <ClipFeed
+                    highlights={highlights}
+                    detectedGame={detectedGame}
+                    onEdit={setEditingHighlightId}
+                    onDownloadAll={handleDownloadAll}
+                    debugKillExport={result.debugKillExport}
+                    showDebugUi={showDebugUi}
+                    sourceTitle={result.sourceName || result.url}
+                  />
                 )}
 
               </>

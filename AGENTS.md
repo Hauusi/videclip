@@ -19,8 +19,11 @@ CS2 VODs use HUD kill-feed detection (`kill_feed_detect.py`), quality filtering 
 |------|--------|
 | Analyze job | `server/src/services/analyzePipeline.js` |
 | Montage logic | `server/src/services/montageClip.js` |
+| 9:16 gameplay frame | `server/src/services/smartCrop.js` |
 | HUD quality | `server/src/services/shooterClusters.js` |
 | Python HUD | `server/scripts/kill_feed_detect.py` |
+| Client UI tiles / editor chrome | `client/src/components/clip/`, `project/`, `editor/` |
+| Client views (Phase 1+) | `client/src/views/` |
 | Production | `62.238.39.31:/opt/videclip`, `systemctl restart videclip` |
 
 ## README update triggers

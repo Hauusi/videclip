@@ -17,8 +17,15 @@ import {
   isViableTranscript,
   mixMusicOntoVideo,
 } from './captionPipeline.js';
-import { detectFaceCrop, buildCropFilter, getCroppedDimensions } from './smartCrop.js';
-import { isWebcamPipEnabled } from './webcamPip.js';
+import {
+  detectFaceCrop,
+  buildBlurLetterboxGraph,
+  buildCropFilter,
+  getCanvas916Dimensions,
+  getCroppedDimensions,
+  isGameplayBlurLetterbox,
+} from './smartCrop.js';
+import { buildWebcamPipVideoGraph, isWebcamPipEnabled } from './webcamPip.js';
 import {
   applyWideTimeRange,
   buildVideoCompositeGraph,
@@ -695,26 +702,76 @@ async function renderStyledHookPreview(hookRawPath, outputPath, highlight, optio
     clipBoosted = false,
   } = options;
 
+  const gameplayFraming = options.gameplayFraming || 'wide';
   const mainDurNominal = Math.max(1, highlight.end_time - highlight.start_time);
   const teaserSec = options.knownHookTeaserSec ?? getHookTeaserRequested(highlight);
   const source = await probeVideoSource(hookRawPath);
-  const cropped = getCroppedDimensions(source.width, source.height, aspectRatio);
-  const vfParts = [
-    buildCropFilter(aspectRatio, source.width, source.height, null),
-    buildScaleFilter(cropped.height, true),
-    buildColorGradeFilter(colorGrade, aiStrength, { boosted: clipBoosted }),
-  ].filter(Boolean);
+  const useBlurLetterbox = isGameplayBlurLetterbox(
+    source.width,
+    source.height,
+    aspectRatio,
+    gameplayFraming,
+  );
+  const canvas916 = getCanvas916Dimensions(true);
+  const cropped = getCroppedDimensions(source.width, source.height, aspectRatio, gameplayFraming);
+  const colorF = buildColorGradeFilter(colorGrade, aiStrength, { boosted: clipBoosted });
 
-  const mainOutW = Math.max(2, Math.round(480 * (cropped.width / cropped.height)));
-  const evenW = mainOutW - (mainOutW % 2);
-  if (showHook) {
-    vfParts.push(
-      ...buildHookDrawtextFilters(hook || highlight.hook || highlight.title || '', {
-        preview: true,
-        playResX: evenW,
-        hookEnd: teaserSec,
-      }),
+  let mainOutW;
+  let mainOutH;
+  let encodeArgs;
+
+  if (useBlurLetterbox) {
+    mainOutW = canvas916.width;
+    mainOutH = canvas916.height;
+    const baseChain = colorF || 'copy';
+    const composite = buildBlurLetterboxGraph(
+      baseChain,
+      source.width,
+      source.height,
+      mainOutW,
+      mainOutH,
+      gameplayFraming,
     );
+    let graph = composite.graph;
+    let videoLabel = composite.videoOutputLabel;
+    if (showHook) {
+      const hookFilters = buildHookDrawtextFilters(
+        hook || highlight.hook || highlight.title || '',
+        { preview: true, playResX: mainOutW, hookEnd: teaserSec },
+      ).join(',');
+      graph += `;[${videoLabel}]${hookFilters}[vfinal]`;
+      videoLabel = 'vfinal';
+    }
+    encodeArgs = [
+      '-y',
+      '-i',
+      path.resolve(hookRawPath),
+      '-filter_complex',
+      graph,
+      '-map',
+      `[${videoLabel}]`,
+      '-map',
+      '0:a',
+    ];
+  } else {
+    const vfParts = [
+      buildCropFilter(aspectRatio, source.width, source.height, null),
+      buildScaleFilter(cropped.height, true),
+      colorF,
+    ].filter(Boolean);
+    mainOutW = Math.max(2, Math.round(480 * (cropped.width / cropped.height)));
+    mainOutW = mainOutW - (mainOutW % 2);
+    mainOutH = 480;
+    if (showHook) {
+      vfParts.push(
+        ...buildHookDrawtextFilters(hook || highlight.hook || highlight.title || '', {
+          preview: true,
+          playResX: mainOutW,
+          hookEnd: teaserSec,
+        }),
+      );
+    }
+    encodeArgs = ['-y', '-i', path.resolve(hookRawPath), '-vf', vfParts.join(',')];
   }
 
   const partPath = makePartPath(outputPath);
@@ -726,11 +783,7 @@ async function renderStyledHookPreview(hookRawPath, outputPath, highlight, optio
   await runFfmpegCut(
     path.resolve(ffmpegPath),
     [
-      '-y',
-      '-i',
-      path.resolve(hookRawPath),
-      '-vf',
-      vfParts.join(','),
+      ...encodeArgs,
       ...buildVideoEncodeArgs(true),
       '-c:a',
       'aac',
@@ -1421,6 +1474,7 @@ export async function processClip({
     startFromPass = 1,
     stopAfterPass = 3,
     cachePaths = null,
+    gameplayFraming = 'wide',
   } = options;
 
   await fs.mkdir(workDir, { recursive: true });
@@ -1471,19 +1525,30 @@ export async function processClip({
     }
   }
 
-  const cropped = getCroppedDimensions(source.width, source.height, aspectRatio);
-  const vfParts = [buildCropFilter(aspectRatio, source.width, source.height, faceCrop)];
+  const cropped = getCroppedDimensions(source.width, source.height, aspectRatio, gameplayFraming);
+  const useWide = isWideOverlayActive(wideMoment);
+  const useBlurLetterbox =
+    isGameplayBlurLetterbox(source.width, source.height, aspectRatio, gameplayFraming) &&
+    !useWide;
 
   const colorF = buildColorGradeFilter(colorGrade, aiStrength, { boosted: clipBoosted });
-  if (colorF) vfParts.push(colorF);
+  const vfParts = useBlurLetterbox
+    ? [colorF].filter(Boolean)
+    : [buildCropFilter(aspectRatio, source.width, source.height, faceCrop), colorF].filter(
+        Boolean,
+      );
 
-  const scaleF = buildScaleFilter(cropped.height, preview);
+  const scaleF = useBlurLetterbox ? null : buildScaleFilter(cropped.height, preview);
 
   const teaserSec = highlight.cold_open ? getHookTeaserDuration(highlight) : 0;
 
   let mainOutW = cropped.width;
   let mainOutH = cropped.height;
-  if (scaleF) {
+  if (useBlurLetterbox) {
+    const canvas916 = getCanvas916Dimensions(preview);
+    mainOutW = canvas916.width;
+    mainOutH = canvas916.height;
+  } else if (scaleF) {
     if (preview) {
       mainOutH = 480;
       mainOutW = Math.round(480 * (cropped.width / cropped.height));
@@ -1587,7 +1652,6 @@ export async function processClip({
   const outFile = path.join(workDir, baseName);
 
   const usePip = isWebcamPipEnabled(webcam);
-  const useWide = isWideOverlayActive(wideMoment);
 
   if (wideMoment && wideOverlayRegion?.pip) {
     wideMoment = { ...wideMoment, pip: wideOverlayRegion.pip };
@@ -1595,8 +1659,14 @@ export async function processClip({
 
   const hasMusic = music && musicPath;
   const hookMusicSkip = highlight.cold_open ? teaserSec : 0;
-  const useFilterComplex = useWide || usePip;
-  const baseVideoChain = vfParts.join(',');
+  const useFilterComplex = useBlurLetterbox || useWide || usePip;
+  const baseVideoChain = vfParts.length ? vfParts.join(',') : 'copy';
+
+  if (useBlurLetterbox) {
+    console.log(
+      `[render] gameplay blur-letterbox ${source.width}x${source.height} → ${mainOutW}x${mainOutH}`,
+    );
+  }
 
   const needsAssPass = assFiles.length > 0 || Boolean(ctaFilter);
   let videoBeforeMusic = pass1Path;
@@ -1614,12 +1684,33 @@ export async function processClip({
     const preserveAudioSync = clipLocalTimestamps;
 
     if (useFilterComplex) {
-      const composite = buildVideoCompositeGraph(baseVideoChain, {
-        wideMoment,
-        webcam: usePip ? webcam : null,
-        mainOutW,
-        mainOutH,
-      });
+      let composite;
+      if (useBlurLetterbox) {
+        composite = buildBlurLetterboxGraph(
+          baseVideoChain,
+          source.width,
+          source.height,
+          mainOutW,
+          mainOutH,
+          gameplayFraming,
+        );
+        if (usePip) {
+          const pipGraph = buildWebcamPipVideoGraph(
+            baseVideoChain,
+            webcam,
+            { width: mainOutW, height: mainOutH },
+            { baseInputLabel: composite.videoOutputLabel },
+          );
+          composite = { graph: `${composite.graph};${pipGraph}`, videoOutputLabel: 'out' };
+        }
+      } else {
+        composite = buildVideoCompositeGraph(baseVideoChain, {
+          wideMoment,
+          webcam: usePip ? webcam : null,
+          mainOutW,
+          mainOutH,
+        });
+      }
       args.push('-filter_complex', composite.graph, '-map', `[${composite.videoOutputLabel}]`, '-map', '0:a');
     } else {
       let vf = baseVideoChain;

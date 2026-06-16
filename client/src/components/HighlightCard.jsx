@@ -1,15 +1,15 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import Toggle from './Toggle';
-import ClipTrimSlider from './ClipTrimSlider';
 import WebcamSelector from './WebcamSelector';
 import { defaultPipSettings } from './WebcamPipPreview';
 import WideOverlaySelector, { defaultWideSelection } from './WideOverlaySelector';
-import EditorAccordion from './EditorAccordion';
-// DEBUG_KILL_EXPORT START
-import DebugKillExportPanel from './DebugKillExportPanel.jsx';
-// DEBUG_KILL_EXPORT END
+import EditorTimeline from './editor/EditorTimeline';
+import FramingEditorRow from './editor/FramingEditorRow';
+import MontageInfoPanel from './editor/MontageInfoPanel';
 import PreviewRenderOverlay from './PreviewRenderOverlay';
 import ClipPreviewControls from './ClipPreviewControls';
+import GameplayFramingPreview from './GameplayFramingPreview';
+import PreviewChrome from './editor/PreviewChrome';
 import {
   viralColor,
   formatTime,
@@ -19,6 +19,16 @@ import {
   isMontageHighlight,
   getHighlightDisplayDuration,
 } from '../utils/helpers';
+import {
+  buildOutputLayout,
+  outputTimeToSegmentIndex,
+  resizeSegmentEnd,
+} from '../utils/montageTimeline';
+import {
+  advanceMontagePlayback,
+  montageTotalSec,
+  sourceTimeFromOutput,
+} from '../utils/montagePreview';
 import { clampTrimTimes, MAX_MAIN_SEC } from '../utils/trimLimits';
 import { clampHookOffsetInClip, minColdOpenPeakOffset } from '../utils/coldOpenTiming';
 import {
@@ -28,7 +38,14 @@ import {
 } from '../utils/hookTrim';
 import { processClip, previewClip, pollJob } from '../api';
 import { enqueuePreview } from '../utils/previewQueue';
-import { previewFrameClass, previewVideoClass } from '../utils/responsiveLayout';
+import { previewVideoClass } from '../utils/responsiveLayout';
+import {
+  isGameplayFramingAvailable,
+  getGameplayFramingLabel,
+  normalizeGameplayFramingMode,
+  resolveFramingClipSources,
+} from '../utils/gameplayFraming';
+import { isDebugUiEnabled } from '../utils/debugUi';
 
 const CAPTION_STYLES = [
   { id: 'fire', label: 'Fire', hint: 'Orange/rot — Shorts-Standard' },
@@ -45,6 +62,7 @@ function structuralSettingsKey(s) {
     s.hook_offset_in_clip,
     s.cold_open,
     s.aspectRatio,
+    // gameplayFraming: client-side CSS only — export applies framing, no preview re-render
     s.captions,
     s.caption_style,
     s.showHook,
@@ -59,6 +77,7 @@ function structuralSettingsKey(s) {
     s.aiStrength,
     s.musicTrackId,
     s.musicAuto,
+    s.montage_segments ? JSON.stringify(s.montage_segments) : '',
   ].join('|');
 }
 
@@ -200,6 +219,7 @@ export default function HighlightCard({
       endOffset: null,
     },
     aspectRatio: '9:16',
+    gameplayFraming: 'wide',
     aiStrength: globalSettings.aiStrength ?? 75,
     webcam: {
       enabled: false,
@@ -209,6 +229,7 @@ export default function HighlightCard({
       pip: defaultPipSettings(),
       shape: 'rectangle',
     },
+    montage_segments: highlight.montage_segments ? [...highlight.montage_segments] : null,
   });
   const [processing, setProcessing] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -238,7 +259,11 @@ export default function HighlightCard({
   const [playerCurrentSec, setPlayerCurrentSec] = useState(0);
   const [previewVideoReady, setPreviewVideoReady] = useState(true);
   const [trimDragging, setTrimDragging] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
   const trimDraggingRef = useRef(false);
+  const montageActiveKillRef = useRef(0);
+  const montagePreviewSourceRef = useRef('');
   const optionsScrollRef = useRef(null);
   const optionsScrollTopRef = useRef(0);
   settingsRef.current = settings;
@@ -262,6 +287,19 @@ export default function HighlightCard({
   }, [globalSettings.musicTrackId, previewStems?.musicTrackId]);
 
   const trimMatchesAnalyze = !trimChangedFromHighlight(settings, highlight);
+  const isMontageClip = isMontageHighlight(highlight);
+  const effectiveMontageSegments =
+    isMontageClip && settings.montage_segments?.length
+      ? settings.montage_segments
+      : highlight.montage_segments || [];
+  const montageOutputSec = isMontageClip
+    ? Math.max(
+        1,
+        montageTotalSec(effectiveMontageSegments, getHighlightDisplayDuration(highlight)),
+      )
+    : getHighlightDisplayDuration(highlight);
+  const liveMontagePreview =
+    isMontageClip && Boolean(sourceVideoUrl) && !settings.cold_open;
   const clampedTrimEarly = clampTrimTimes(settings.start_time, settings.end_time, sourceDuration);
   const measuredAnalyzeSec = Number(highlight.clip_duration_measured);
   const analyzeFileMatchesTrim =
@@ -293,11 +331,13 @@ export default function HighlightCard({
     ? videoSource === 'preview' && previewUrl
       ? previewUrl
       : null
-    : liveTrimPreview && (!serverPreviewReady || trimDragging)
+    : liveMontagePreview
       ? sourceVideoUrl
-      : serverPreviewReady
-        ? previewUrl
-        : analyzeVideoUrl;
+      : liveTrimPreview && (!serverPreviewReady || trimDragging)
+        ? sourceVideoUrl
+        : serverPreviewReady
+          ? previewUrl
+          : analyzeVideoUrl;
 
   const displayVideoUrl =
     primaryVideoUrl ||
@@ -312,6 +352,18 @@ export default function HighlightCard({
   }, [primaryVideoUrl]);
 
   useEffect(() => {
+    if (liveMontagePreview) {
+      setPlayerDurationSec(montageOutputSec);
+      const sourceKey = `${sourceVideoUrl}|${settings.cold_open}`;
+      if (montagePreviewSourceRef.current !== sourceKey) {
+        montagePreviewSourceRef.current = sourceKey;
+        setPlayerCurrentSec(0);
+        montageActiveKillRef.current = 0;
+      }
+      setPreviewVideoReady(Boolean(sourceVideoUrl));
+      return;
+    }
+    montagePreviewSourceRef.current = '';
     if (liveTrimPreview && !settings.cold_open) {
       const dur = Math.max(0.5, settings.end_time - settings.start_time);
       setPlayerDurationSec(dur);
@@ -322,10 +374,64 @@ export default function HighlightCard({
     setPlayerDurationSec(null);
     setPlayerCurrentSec(0);
     setPreviewVideoReady(!displayVideoUrl);
-  }, [displayVideoUrl, liveTrimPreview, settings.start_time, settings.end_time, settings.cold_open]);
+  }, [
+    displayVideoUrl,
+    liveMontagePreview,
+    liveTrimPreview,
+    montageOutputSec,
+    settings.start_time,
+    settings.end_time,
+    settings.cold_open,
+    sourceVideoUrl,
+  ]);
 
   useEffect(() => {
-    if (!liveTrimPreview || settings.cold_open) return undefined;
+    if (!liveMontagePreview || settings.cold_open) return undefined;
+    const video = videoRef.current;
+    if (!video || !sourceVideoUrl) return undefined;
+
+    const kills = effectiveMontageSegments.filter((s) => s.segment_type !== 'payoff');
+    if (!kills.length) return undefined;
+
+    const seekToMontageStart = () => {
+      try {
+        if (playerCurrentSecRef.current <= 0.05) {
+          video.currentTime = kills[0].start;
+          montageActiveKillRef.current = 0;
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+
+    seekToMontageStart();
+    video.addEventListener('loadedmetadata', seekToMontageStart);
+
+    return () => {
+      video.removeEventListener('loadedmetadata', seekToMontageStart);
+    };
+  }, [liveMontagePreview, sourceVideoUrl, settings.cold_open, effectiveMontageSegments]);
+
+  const playerCurrentSecRef = useRef(0);
+  playerCurrentSecRef.current = playerCurrentSec;
+
+  useEffect(() => {
+    if (!liveMontagePreview) return;
+    const v = videoRef.current;
+    if (!v) return;
+    try {
+      const outT = playerCurrentSecRef.current;
+      const layout = buildOutputLayout(effectiveMontageSegments);
+      const ki = outputTimeToSegmentIndex(layout, outT);
+      montageActiveKillRef.current = ki >= 0 ? ki : 0;
+      v.currentTime = sourceTimeFromOutput(effectiveMontageSegments, outT);
+    } catch {
+      /* ignore */
+    }
+  }, [effectiveMontageSegments, liveMontagePreview]);
+
+  useEffect(() => {
+    if (!liveTrimPreview || settings.cold_open || liveMontagePreview) return undefined;
     const video = videoRef.current;
     if (!video || !displayVideoUrl) return undefined;
 
@@ -758,6 +864,7 @@ export default function HighlightCard({
           ...globalSettings,
           ...toPreviewSettings(settings),
           aspectRatio: settings.aspectRatio || '9:16',
+          gameplayFraming: normalizeGameplayFramingMode(settingsRef.current.gameplayFraming),
           title: highlight.title,
         },
       });
@@ -780,9 +887,9 @@ export default function HighlightCard({
     onToast?.('Script copied', 'success');
   };
 
-  const isMontageClip = isMontageHighlight(highlight);
-  const montageOutputSec = getHighlightDisplayDuration(highlight);
-  const montageKillCount = highlight.montage_kill_count || highlight.montage_segments?.length || 0;
+  const montageKillCount =
+    highlight.montage_kill_count || effectiveMontageSegments.filter((s) => s.segment_type !== 'payoff').length || 0;
+  const showDebugMontage = isDebugUiEnabled();
 
   const clampedTrim = clampTrimTimes(settings.start_time, settings.end_time, sourceDuration);
   const mainDuration = isMontageClip ? montageOutputSec : clampedTrim.duration;
@@ -844,6 +951,15 @@ export default function HighlightCard({
   const overlaySeekSec = settings.start_time;
   const clipPreviewUrl =
     videoSource === 'preview' && previewUrl ? previewUrl : highlight.overviewUrl || null;
+  const gameplayFramingMode = normalizeGameplayFramingMode(settings.gameplayFraming);
+  const framingSources = resolveFramingClipSources(highlight, jobId);
+  const framingVideoUrl =
+    liveMontagePreview && sourceVideoUrl ? sourceVideoUrl : framingSources.primaryUrl;
+  const useClientFraming =
+    isGameplayFramingAvailable(settings.aspectRatio, sourceWidth, sourceHeight) &&
+    Boolean(framingVideoUrl) &&
+    !liveTrimPreview &&
+    !settings.cold_open;
   const trimMin = Math.max(0, highlight.start_time - 30);
   const trimMax =
     sourceDuration > 0
@@ -859,72 +975,19 @@ export default function HighlightCard({
       children: (
         <>
           {isMontageClip ? (
-            <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 px-4 py-3 space-y-2">
-              <p className="text-sm font-medium text-emerald-300">Kill-Montage</p>
-              <p className="text-sm text-theme-muted">
-                {montageKillCount} Kills als Jump-Cuts
-                {highlight.has_payoff ? ' + Defuse-Finale' : ''} ·{' '}
-                <span className="text-white tabular-nums font-medium">
-                  {formatTime(montageOutputSec)}
-                </span>{' '}
-                Ausgabe-Länge
-              </p>
-              {highlight.montage_segments?.length ? (
-                <div className="space-y-1.5">
-                  <p className="text-2xs text-theme-muted tabular-nums leading-relaxed">
-                    Jump-Cuts im VOD:{' '}
-                    {highlight.montage_segments
-                      .filter((s) => s.segment_type !== 'payoff')
-                      .map(
-                        (s, i) =>
-                          `${formatTime(s.raw_time ?? s.peak_time ?? s.start)} (${formatTime(s.start)}+${Number(s.duration).toFixed(1)}s)`,
-                      )
-                      .join(' · ')}
-                  </p>
-                  {highlight.montage_segments.some((s) => s.debug_download_url) ? (
-                    <div className="flex flex-wrap gap-1.5">
-                      <span className="text-2xs text-amber-300/90 w-full">
-                        Debug: Schnitte dieses Clips
-                      </span>
-                      {highlight.montage_segments
-                        .filter((s) => s.segment_type !== 'payoff' && s.debug_download_url)
-                        .map((s, i) => (
-                          <a
-                            key={`${s.start}-${i}`}
-                            href={s.debug_download_url}
-                            download
-                            className="text-2xs px-2 py-1 rounded-md border border-amber-500/30 text-amber-200/90 hover:bg-amber-500/10 tabular-nums"
-                          >
-                            ↓ Kill {i + 1} · {formatTime(s.raw_time ?? s.peak_time ?? s.start)}
-                          </a>
-                        ))}
-                    </div>
-                  ) : null}
-                </div>
-              ) : highlight.source_span_start != null && highlight.source_span_end != null ? (
-                <p className="text-2xs text-theme-muted tabular-nums">
-                  Quelle im VOD: {formatTime(highlight.source_span_start)} –{' '}
-                  {formatTime(highlight.source_span_end)}
-                </p>
-              ) : null}
-              <p className="text-2xs text-theme-muted">
-                Trim-Slider ist bei Montagen deaktiviert — Schnitte kommen aus den Kill-Momenten.
-              </p>
-              {/* DEBUG_KILL_EXPORT — remove with DebugKillExportPanel.jsx */}
-              {debugKillExport ? (
-                <DebugKillExportPanel debugKillExport={debugKillExport} compact />
-              ) : null}
-            </div>
-          ) : (
-            <ClipTrimSlider
-              min={trimMin}
-              max={trimMax}
-              start={settings.start_time}
-              end={settings.end_time}
-              sourceDuration={sourceDuration}
-              onChange={handleTrimChange}
-              onDraggingChange={setTrimDrag}
+            <MontageInfoPanel
+              highlight={highlight}
+              killCount={montageKillCount}
+              outputSec={montageOutputSec}
+              debugKillExport={debugKillExport}
+              showDebug={showDebugMontage}
             />
+          ) : (
+            <p className="text-sm text-theme-muted leading-relaxed">
+              Ausschnitt auf der <span className="text-theme">Timeline unten</span> mit den Griffen
+              setzen — linker Griff = Start, rechter = Ende. Am Playhead schneiden mit dem
+              Scheren-Icon.
+            </p>
           )}
           <div className="min-h-[3.25rem] space-y-1">
             {trimWasClamped && !isMontageClip ? (
@@ -1393,60 +1456,372 @@ export default function HighlightCard({
     },
   ];
 
+  const lookSection = editorSections.find((s) => s.id === 'look');
+  const musicSection = editorSections.find((s) => s.id === 'music');
+  const sheetSections = isMontageClip
+    ? [
+        {
+          id: 'clip',
+          step: 1,
+          title: 'Clip',
+          subtitle: 'Kill-Montage & Segmente',
+          children: (
+            <MontageInfoPanel
+              highlight={highlight}
+              killCount={montageKillCount}
+              outputSec={montageOutputSec}
+              debugKillExport={debugKillExport}
+              showDebug={showDebugMontage}
+            />
+          ),
+        },
+        lookSection
+          ? { ...lookSection, step: 2, title: 'Look', subtitle: 'Format & Farb-Look' }
+          : null,
+        musicSection
+          ? { ...musicSection, step: 3, title: 'Musik', subtitle: musicSection.subtitle }
+          : null,
+      ].filter(Boolean)
+    : editorSections;
+
+  const montageLayout = isMontageClip ? buildOutputLayout(effectiveMontageSegments) : [];
+  const activeKillIndex = isMontageClip
+    ? outputTimeToSegmentIndex(montageLayout, playerCurrentSec)
+    : -1;
+
+  const handleKillSeek = useCallback(
+    (sec) => {
+      const v = videoRef.current;
+      if (!v) return;
+      try {
+        v.pause();
+        if (liveMontagePreview) {
+          const layout = buildOutputLayout(effectiveMontageSegments);
+          const ki = outputTimeToSegmentIndex(layout, sec);
+          montageActiveKillRef.current = ki >= 0 ? ki : 0;
+          const sourceT = sourceTimeFromOutput(effectiveMontageSegments, sec);
+          v.currentTime = sourceT;
+          setPlayerCurrentSec(sec);
+          return;
+        }
+        v.currentTime = Math.max(0, sec);
+      } catch {
+        /* ignore */
+      }
+    },
+    [effectiveMontageSegments, liveMontagePreview],
+  );
+
+  const timelineTotalSec = isMontageClip ? montageOutputSec : Math.max(1, trimMax - trimMin);
+  const timelineCurrentSec = isMontageClip
+    ? playerCurrentSec
+    : Math.max(
+        0,
+        Math.min(
+          timelineTotalSec,
+          (liveTrimPreview ? settings.start_time + playerCurrentSec : settings.start_time) - trimMin,
+        ),
+      );
+
+  const handleTimelineSeek = useCallback(
+    (t) => {
+      const v = videoRef.current;
+      if (!v || !Number.isFinite(t)) return;
+      if (isMontageClip) {
+        handleKillSeek(t);
+        return;
+      }
+      const sourceT = trimMin + t;
+      try {
+        v.pause();
+        if (liveTrimPreview) {
+          v.currentTime = Math.max(settings.start_time, Math.min(settings.end_time, sourceT));
+        } else {
+          v.currentTime = Math.max(0, sourceT - settings.start_time);
+        }
+      } catch {
+        /* ignore */
+      }
+    },
+    [
+      handleKillSeek,
+      isMontageClip,
+      liveTrimPreview,
+      settings.end_time,
+      settings.start_time,
+      trimMin,
+    ],
+  );
+
+  const handlePlayPause = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) v.play().catch(() => {});
+    else v.pause();
+  }, []);
+
+  const handleSkipBack = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    try {
+      v.currentTime = Math.max(0, v.currentTime - 2);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const handleSkipForward = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    try {
+      v.currentTime = Math.min(v.duration || timelineTotalSec, v.currentTime + 2);
+    } catch {
+      /* ignore */
+    }
+  }, [timelineTotalSec]);
+
+  const handleSplitAtPlayhead = useCallback(() => {
+    if (isMontageClip) {
+      const segs = effectiveMontageSegments;
+      const layout = buildOutputLayout(segs);
+      const ki = outputTimeToSegmentIndex(layout, playerCurrentSec);
+      if (ki < 0) return;
+      const row = layout[ki];
+      const newDur = Math.max(1.15, playerCurrentSec - row.outStart + 0.05);
+      const next = resizeSegmentEnd(segs, ki, newDur, { sourceDuration });
+      update({ montage_segments: next });
+      onToast?.(`Kill ${ki + 1} gekürzt`, 'success');
+      return;
+    }
+    const minClip = 8;
+    const cutAt = liveTrimPreview
+      ? settings.start_time + playerCurrentSec
+      : settings.start_time + Math.min(mainDuration, playerCurrentSec);
+    if (cutAt > settings.start_time + minClip && cutAt < settings.end_time - 2) {
+      update({ end_time: cutAt });
+      onToast?.('Clip am Playhead gekürzt', 'success');
+    }
+  }, [
+    isMontageClip,
+    effectiveMontageSegments,
+    playerCurrentSec,
+    sourceDuration,
+    liveTrimPreview,
+    settings.start_time,
+    settings.end_time,
+    mainDuration,
+    update,
+    onToast,
+  ]);
+
+  const handleMontageSegmentsChange = useCallback(
+    (segments) => {
+      update({ montage_segments: segments });
+      lastRenderedPreviewKeyRef.current = '';
+    },
+    [update],
+  );
+
+  const handleSetIn = useCallback(() => {
+    const sourceT = trimMin + timelineCurrentSec;
+    const c = clampTrimTimes(sourceT, settings.end_time, sourceDuration);
+    update({ start_time: c.start, end_time: c.end });
+  }, [timelineCurrentSec, trimMin, settings.end_time, sourceDuration, update]);
+
+  const handleSetOut = useCallback(() => {
+    const sourceT = trimMin + timelineCurrentSec;
+    const c = clampTrimTimes(settings.start_time, sourceT, sourceDuration);
+    update({ start_time: c.start, end_time: c.end });
+  }, [timelineCurrentSec, trimMin, settings.start_time, sourceDuration, update]);
+
+  const musicLabel =
+    settings.musicAuto !== false
+      ? `${MOODS.find((m) => m.id === mood)?.label || mood || 'Auto'}`
+      : musicTrack || settings.musicTrackId || 'Musik';
+
+  const showFramingVideo = useClientFraming
+    ? Boolean(framingSources.primaryUrl)
+    : Boolean(displayVideoUrl);
+
+  const onVideoLoadedMetadata = (e) => {
+    const v = e.currentTarget;
+    if (liveMontagePreview) {
+      setPlayerDurationSec(montageOutputSec);
+      const kills = effectiveMontageSegments.filter((s) => s.segment_type !== 'payoff');
+      if (kills.length) {
+        try {
+          v.currentTime = kills[0].start;
+        } catch {
+          /* ignore */
+        }
+      }
+      montageActiveKillRef.current = 0;
+      setPlayerCurrentSec(0);
+      return;
+    }
+    if (liveTrimPreview) {
+      const dur = Math.max(0.5, settings.end_time - settings.start_time);
+      setPlayerDurationSec(dur);
+      try {
+        v.currentTime = settings.start_time;
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    const d = v.duration;
+    if (!Number.isFinite(d) || d <= 0) return;
+    setPlayerDurationSec(d);
+  };
+
+  const onVideoTimeUpdate = (e) => {
+    const v = e.currentTarget;
+    if (liveMontagePreview) {
+      const outT = advanceMontagePlayback(v, effectiveMontageSegments, montageActiveKillRef);
+      setPlayerCurrentSec(outT);
+      return;
+    }
+    if (liveTrimPreview) {
+      setPlayerCurrentSec(
+        Math.max(0, Math.min(mainDuration, v.currentTime - settings.start_time)),
+      );
+      return;
+    }
+    const t = v.currentTime;
+    if (Number.isFinite(t)) setPlayerCurrentSec(t);
+  };
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return undefined;
+    const onPlay = () => setIsPlaying(true);
+    const onPause = () => setIsPlaying(false);
+    v.addEventListener('play', onPlay);
+    v.addEventListener('pause', onPause);
+    setIsPlaying(!v.paused);
+    return () => {
+      v.removeEventListener('play', onPlay);
+      v.removeEventListener('pause', onPause);
+    };
+  }, [showFramingVideo, displayVideoUrl, gameplayFramingMode, videoSource, previewUrl]);
+
+  const framingBadge = showFramingVideo ? (
+    <span
+      className={`editor-framing-badge ${
+        useClientFraming
+          ? 'editor-framing-badge--live'
+          : videoSource === 'preview'
+            ? 'editor-framing-badge--preview'
+            : liveTrimPreview
+              ? 'editor-framing-badge--trim'
+              : 'editor-framing-badge--raw'
+      }`}
+    >
+      {useClientFraming
+        ? getGameplayFramingLabel(gameplayFramingMode)
+        : videoSource === 'preview'
+          ? 'Vorschau'
+          : liveMontagePreview
+            ? 'Live'
+            : liveTrimPreview
+              ? 'Live'
+              : 'Rohclip'}
+    </span>
+  ) : null;
+
+  const peakScoreBadge =
+    highlight.viral_score > 0 ? (
+      <span className={`editor-peak-badge ${viralColor(highlight.viral_score)}`}>
+        Peak {highlight.viral_score}
+      </span>
+    ) : null;
+
   const videoPanel = (
-    <div className={previewFrameClass(settings.aspectRatio)}>
-        {displayVideoUrl ? (
+    <PreviewChrome
+      aspectRatio={settings.aspectRatio}
+      badge={framingBadge}
+      topLeft={peakScoreBadge}
+    >
+        {showFramingVideo ? (
           <>
-            <video
-              key={
-                liveTrimPreview
-                  ? `live-source-${highlight.id}`
-                  : displayVideoUrl || `${highlight.id}-${videoSource}-empty`
-              }
-              ref={videoRef}
-              src={displayVideoUrl}
-              playsInline
-              className={previewVideoClass(settings.aspectRatio)}
-              onLoadedMetadata={(e) => {
-                const v = e.currentTarget;
-                if (liveTrimPreview) {
-                  const dur = Math.max(0.5, settings.end_time - settings.start_time);
-                  setPlayerDurationSec(dur);
-                  try {
-                    v.currentTime = settings.start_time;
-                  } catch {
-                    /* ignore */
+            {useClientFraming ? (
+              <GameplayFramingPreview
+                src={framingVideoUrl}
+                fallbackSrc={framingSources.fallbackUrl}
+                mode={gameplayFramingMode}
+                videoRef={videoRef}
+                sourceAspectFallback={
+                  liveMontagePreview || framingSources.isRaw
+                    ? (sourceWidth || 1920) / (sourceHeight || 1080)
+                    : 9 / 16
+                }
+                onLoadedMetadata={onVideoLoadedMetadata}
+                onTimeUpdate={onVideoTimeUpdate}
+                onCanPlay={() => setPreviewVideoReady(true)}
+              >
+                <ClipPreviewControls
+                  videoRef={videoRef}
+                  mediaKey={`${framingVideoUrl}|${gameplayFramingMode}|${montageOutputSec}`}
+                  mode={liveMontagePreview ? 'montage' : 'file'}
+                  startTime={settings.start_time}
+                  endTime={settings.end_time}
+                  totalSec={liveMontagePreview ? montageOutputSec : playerDurationSec ?? clipTotalSec}
+                  outputCurrentSec={playerCurrentSec}
+                  onSeekOutput={handleTimelineSeek}
+                />
+                {useStemAudio && (
+                  <audio
+                    ref={musicAudioRef}
+                    src={previewStems.musicBedUrl}
+                    preload="auto"
+                    loop
+                    className="hidden"
+                  />
+                )}
+              </GameplayFramingPreview>
+            ) : (
+              <>
+                <video
+                  key={
+                    liveMontagePreview
+                      ? `montage-source-${highlight.id}`
+                      : liveTrimPreview
+                        ? `live-source-${highlight.id}`
+                        : displayVideoUrl || `${highlight.id}-${videoSource}-empty`
                   }
-                  return;
-                }
-                const d = v.duration;
-                if (!Number.isFinite(d) || d <= 0) return;
-                setPlayerDurationSec(d);
-              }}
-              onTimeUpdate={(e) => {
-                const v = e.currentTarget;
-                if (liveTrimPreview) {
-                  setPlayerCurrentSec(
-                    Math.max(0, Math.min(mainDuration, v.currentTime - settings.start_time)),
-                  );
-                  return;
-                }
-                const t = v.currentTime;
-                if (Number.isFinite(t)) setPlayerCurrentSec(t);
-              }}
-              onCanPlay={() => {
-                setPreviewVideoReady(true);
-              }}
-            />
-            <ClipPreviewControls
-              videoRef={videoRef}
-              mode={liveTrimPreview ? 'live' : 'file'}
-              startTime={settings.start_time}
-              endTime={settings.end_time}
-              totalSec={liveTrimPreview ? mainDuration : playerDurationSec ?? clipTotalSec}
-            />
-            {useStemAudio && (
-              <audio ref={musicAudioRef} src={previewStems.musicBedUrl} preload="auto" loop className="hidden" />
+                  ref={videoRef}
+                  src={displayVideoUrl}
+                  playsInline
+                  className={previewVideoClass(settings.aspectRatio)}
+                  onLoadedMetadata={onVideoLoadedMetadata}
+                  onTimeUpdate={onVideoTimeUpdate}
+                  onCanPlay={() => setPreviewVideoReady(true)}
+                />
+                <ClipPreviewControls
+                  videoRef={videoRef}
+                  mode={liveMontagePreview ? 'montage' : liveTrimPreview ? 'live' : 'file'}
+                  startTime={settings.start_time}
+                  endTime={settings.end_time}
+                  totalSec={
+                    liveMontagePreview
+                      ? montageOutputSec
+                      : liveTrimPreview
+                        ? mainDuration
+                        : playerDurationSec ?? clipTotalSec
+                  }
+                  outputCurrentSec={playerCurrentSec}
+                  onSeekOutput={liveMontagePreview ? handleTimelineSeek : undefined}
+                />
+                {useStemAudio && (
+                  <audio
+                    ref={musicAudioRef}
+                    src={previewStems.musicBedUrl}
+                    preload="auto"
+                    loop
+                    className="hidden"
+                  />
+                )}
+              </>
             )}
           </>
         ) : previewLoading ? (
@@ -1475,14 +1850,14 @@ export default function HighlightCard({
         ) : (
           <div className="w-full h-full bg-theme-elevated animate-pulse" />
         )}
-        {displayVideoUrl && settings.cold_open && hookSec >= 0.3 && !hookInPreviewFile && (
+        {showFramingVideo && settings.cold_open && hookSec >= 0.3 && !hookInPreviewFile && (
           <div className="absolute bottom-14 inset-x-2 flex justify-center pointer-events-none z-10">
             <span className="inline-block text-xs leading-snug px-2.5 py-1 rounded-md tabular-nums bg-amber-500/90 text-black">
               Hook noch nicht in der Vorschau — „Vorschau aktualisieren“
             </span>
           </div>
         )}
-        {(processing || previewLoading) && (
+        {(processing || (previewLoading && !useClientFraming)) && (
           <PreviewRenderOverlay
             label={
               processing
@@ -1493,156 +1868,57 @@ export default function HighlightCard({
             }
           />
         )}
-        {displayVideoUrl && (
-          <span
-            className={`absolute top-3 right-3 px-2.5 py-1 rounded-full text-2xs font-semibold uppercase tracking-wide backdrop-blur-md ${
-              videoSource === 'preview'
-                ? 'bg-amber-500/25 text-amber-100 border border-amber-400/40'
-                : liveTrimPreview
-                  ? 'bg-sky-500/25 text-sky-100 border border-sky-400/40'
-                  : 'bg-emerald-500/25 text-emerald-100 border border-emerald-400/40'
-            }`}
-          >
-            {videoSource === 'preview' ? 'Vorschau' : liveTrimPreview ? 'Live' : 'Rohclip'}
-          </span>
-        )}
-        {highlight.confidence != null && (
-          <span
-            className={`absolute top-3 left-3 px-2 py-1 rounded-full text-xs font-medium border ${
-              highlight.confidence >= 75
-                ? 'text-emerald-300 bg-emerald-500/15 border-emerald-500/30'
-                : highlight.confidence >= 55
-                  ? 'text-amber-300 bg-amber-500/15 border-amber-500/30'
-                  : 'text-theme-muted bg-theme-surface border-theme'
-            }`}
-          >
-            {highlight.confidence}% Match
-          </span>
-        )}
         {highlight.clip_boosted && (
-          <span className="absolute bottom-3 left-3 px-2 py-1 rounded-full text-xs font-medium text-peak-purple bg-peak-purple/15 border border-peak-purple/30">
+          <span className="absolute bottom-3 left-3 z-20 px-2 py-1 rounded-full text-xs font-medium text-peak-purple bg-peak-purple/15 border border-peak-purple/30">
             Boosted
           </span>
         )}
-    </div>
+    </PreviewChrome>
   );
 
-  const optionsPanel = (
-    <div className="flex flex-col min-h-0 lg:h-full gap-4">
-      <header className="shrink-0 space-y-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="editor-eyebrow">Clip bearbeiten</p>
-            <h3 className="editor-title">{highlight.title}</h3>
-            {settings.cold_open && (
-              <span className="inline-block mt-2 text-2xs font-semibold uppercase tracking-wide text-peak-purple bg-peak-purple/10 border border-peak-purple/25 rounded-full px-2.5 py-0.5">
-                Cold Open
-              </span>
-            )}
-          </div>
-          <span className={`editor-score ${viralColor(highlight.viral_score)}`}>
-            {highlight.viral_score}
-            <span className="text-2xs font-medium opacity-70">/10</span>
-          </span>
-        </div>
-
-        <div
-          className={`text-xs text-theme-muted rounded-xl px-3 py-2 transition-opacity ${
-            !hasPreviewEffects(settings) && !trimChangedFromHighlight(settings, highlight)
-              ? 'opacity-100'
-              : 'opacity-0 pointer-events-none h-0 py-0 overflow-hidden'
-          }`}
-          style={{ background: 'color-mix(in srgb, var(--t-text) 3%, transparent)' }}
-          aria-hidden={
-            hasPreviewEffects(settings) || trimChangedFromHighlight(settings, highlight)
-          }
+  const exportActions = (
+    <div className="cinema-editor-header-actions" aria-label="Export">
+      <div className="cinema-editor-header-btns">
+        <button
+          type="button"
+          onClick={() => triggerPreview({ force: true })}
+          disabled={!canUpdatePreview}
+          className="cinema-editor-header-btn peak-btn-secondary disabled:opacity-50"
         >
-          Rohclip ohne Effekte — Optionen aktivieren oder Ausschnitt ändern für Live-Vorschau.
-        </div>
-
-        {(highlight.platform_fit || []).length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            {(highlight.platform_fit || []).map((p) => {
-              const meta = PLATFORMS.find((x) => x.id === p);
-              return (
-                <span key={p} className="peak-chip text-xs !py-1 !px-2.5">
-                  {meta?.icon} {meta?.label || p}
-                </span>
-              );
-            })}
-          </div>
+          {previewLoading ? '…' : 'Vorschau'}
+        </button>
+        <button
+          type="button"
+          onClick={handleProcess}
+          disabled={processing}
+          className="cinema-editor-header-btn peak-btn-primary disabled:opacity-50"
+        >
+          {processing ? '…' : 'Export'}
+        </button>
+      </div>
+      <div className="cinema-editor-header-links">
+        {previewUrl && videoSource === 'preview' && (
+          <button type="button" onClick={() => setVideoSource('analyze')} className="cinema-editor-header-link">
+            Rohclip
+          </button>
         )}
-      </header>
-
-      <EditorAccordion
-        sections={editorSections}
-        defaultOpen="clip"
-        panelRef={optionsScrollRef}
-        className="flex-1 min-h-0"
-      />
-
-      <div className="editor-export-dock">
-        <div className="flex flex-col sm:flex-row gap-2">
+        {previewUrl && videoSource === 'analyze' && (
+          <button type="button" onClick={() => setVideoSource('preview')} className="cinema-editor-header-link">
+            Vorschau
+          </button>
+        )}
+        {onSavePrefs && (
           <button
             type="button"
-            onClick={() => triggerPreview({ force: true })}
-            disabled={!canUpdatePreview}
-            className="flex-1 peak-btn-secondary min-h-[44px] sm:min-h-0 !text-sm disabled:opacity-50"
+            onClick={() => onSavePrefs(settingsRef.current)}
+            className="cinema-editor-header-link"
           >
-            {previewLoading ? 'Vorschau…' : 'Vorschau aktualisieren'}
+            Standard
           </button>
-          <button
-            type="button"
-            onClick={handleProcess}
-            disabled={processing}
-            className="flex-1 peak-btn-primary min-h-[44px] sm:min-h-0 !text-sm disabled:opacity-50"
-          >
-            {processing ? 'Export…' : 'Clip exportieren'}
-          </button>
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          {previewUrl && videoSource === 'preview' && (
-            <button
-              type="button"
-              onClick={() => setVideoSource('analyze')}
-              className="text-xs px-2.5 py-1.5 rounded-lg peak-option hover:text-theme"
-            >
-              Rohclip
-            </button>
-          )}
-          {previewUrl && videoSource === 'analyze' && (
-            <button
-              type="button"
-              onClick={() => setVideoSource('preview')}
-              className="text-xs px-2.5 py-1.5 rounded-lg peak-option hover:text-theme"
-            >
-              Vorschau
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={copyScript}
-            className="text-xs px-2.5 py-1.5 rounded-lg peak-option hover:text-theme"
-          >
-            Script kopieren
-          </button>
-          {onSavePrefs && (
-            <button
-              type="button"
-              onClick={() => onSavePrefs(settingsRef.current)}
-              className="text-xs px-2.5 py-1.5 rounded-lg peak-option hover:text-theme"
-            >
-              Als Standard speichern
-            </button>
-          )}
-        </div>
+        )}
         {downloadUrl && (
-          <a
-            href={downloadUrl}
-            download
-            className="block text-center text-xs text-peak-purple hover:opacity-80"
-          >
-            ↓ Export herunterladen
+          <a href={downloadUrl} download className="cinema-editor-header-link cinema-editor-header-link--accent">
+            ↓
           </a>
         )}
       </div>
@@ -1650,16 +1926,87 @@ export default function HighlightCard({
   );
 
   return (
-    <div className="editor-shell">
-      <div className="editor-layout">
-        <div className="editor-preview-col">
-          <div className="editor-preview-stage">
-            <div className="editor-preview-halo" aria-hidden />
-            <div className="editor-preview-frame">{videoPanel}</div>
-          </div>
+    <div className={`editor-shell cinema-editor${editorOpen ? ' cinema-editor--timeline' : ''}`}>
+      <header className="cinema-editor-header">
+        <div className="cinema-editor-header-main min-w-0">
+          <p className="editor-eyebrow">Clip bearbeiten</p>
+          <h3 className="editor-title truncate">{highlight.title}</h3>
+          {(highlight.platform_fit || []).length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-1.5">
+              {(highlight.platform_fit || []).map((p) => {
+                const meta = PLATFORMS.find((x) => x.id === p);
+                return (
+                  <span key={p} className="peak-chip text-2xs !py-0.5 !px-2">
+                    {meta?.icon} {meta?.label || p}
+                  </span>
+                );
+              })}
+            </div>
+          )}
         </div>
-        <div className="editor-settings-col">{optionsPanel}</div>
+        <div className="cinema-editor-header-end">
+          {highlight.viral_score > 0 && (
+            <span className={`editor-score shrink-0 ${viralColor(highlight.viral_score)}`}>
+              {highlight.viral_score}
+              <span className="text-2xs font-medium opacity-70"> Peak</span>
+            </span>
+          )}
+          {exportActions}
+        </div>
+      </header>
+
+      <div className="cinema-editor-body">
+        <div className="cinema-editor-stage">
+          <div className="editor-preview-halo" aria-hidden />
+          <div className="cinema-editor-preview-wrap">{videoPanel}</div>
+        </div>
+
+        <div className="cinema-editor-controls">
+          <FramingEditorRow
+            showFraming={useClientFraming}
+            framingValue={gameplayFramingMode}
+            onFramingChange={(mode) => update({ gameplayFraming: mode })}
+            editorOpen={editorOpen}
+            onToggleEditor={() => setEditorOpen((open) => !open)}
+          />
+        </div>
       </div>
+
+      {editorOpen && (
+        <EditorTimeline
+          isMontage={isMontageClip}
+          totalSec={timelineTotalSec}
+          currentSec={timelineCurrentSec}
+          onSeek={handleTimelineSeek}
+          isPlaying={isPlaying}
+          onPlayPause={handlePlayPause}
+          onSkipBack={handleSkipBack}
+          onSkipForward={handleSkipForward}
+          segments={effectiveMontageSegments}
+          onSegmentsChange={handleMontageSegmentsChange}
+          activeSegmentIndex={activeKillIndex}
+          trimMin={trimMin}
+          trimMax={trimMax}
+          trimStart={settings.start_time}
+          trimEnd={settings.end_time}
+          onTrimChange={({ start, end }) => update({ start_time: start, end_time: end })}
+          onTrimDragging={setTrimDrag}
+          sourceDuration={sourceDuration}
+          onSplit={handleSplitAtPlayhead}
+          onSetIn={handleSetIn}
+          onSetOut={handleSetOut}
+          canSplit={timelineCurrentSec > 0}
+          thumbnailUrl={overlayThumbUrl}
+          musicEnabled={settings.music}
+          musicLabel={musicLabel}
+          musicVolume={settings.musicVolume ?? 15}
+          onMusicToggle={(v) => update({ music: v })}
+          onAddAudio={() => update({ music: true })}
+          onRemoveAudio={() => update({ music: false })}
+          onMusicVolumeChange={(v) => update({ musicVolume: v })}
+        />
+      )}
+
     </div>
   );
 }
