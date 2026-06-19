@@ -1,10 +1,11 @@
 import PeakClipLogo from '../brand/PeakClipLogo';
 import ThemeToggle from './ThemeToggle';
+import { formatRelativeTime, projectClipLabel } from '../../utils/projects';
 
 const NAV = [
   {
     id: 'overview',
-    label: 'Clips',
+    label: 'Start',
     icon: (
       <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
@@ -13,7 +14,7 @@ const NAV = [
   },
   {
     id: 'projects',
-    label: 'Projekte',
+    label: 'Bibliothek',
     icon: (
       <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
         <path
@@ -41,17 +42,6 @@ function NavButton({ item, isActive, collapsed, onNavigate }) {
       {!collapsed && <span className="truncate">{item.label}</span>}
     </button>
   );
-}
-
-function formatRelativeTime(ts) {
-  const diff = Date.now() - Number(ts);
-  if (!Number.isFinite(diff) || diff < 0) return '';
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'gerade eben';
-  if (mins < 60) return `vor ${mins} Min.`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `vor ${hrs} Std.`;
-  return `vor ${Math.floor(hrs / 24)} T.`;
 }
 
 export default function AppSidebar({
@@ -137,8 +127,10 @@ export default function AppSidebar({
           <ul className="space-y-1 overflow-y-auto scrollbar-thin flex-1 min-h-0 pr-0.5">
             {history.map((entry) => {
               const isActive = activeJobId && entry.jobId === activeJobId;
+              const when = formatRelativeTime(entry.updatedAt || entry.createdAt || entry.at);
+              const clips = projectClipLabel(entry.clipCount);
               return (
-                <li key={entry.at}>
+                <li key={entry.id || entry.jobId || entry.at}>
                   <button
                     type="button"
                     onClick={() => onLoadProject?.(entry)}
@@ -151,8 +143,8 @@ export default function AppSidebar({
                     <p className="text-sm font-medium text-theme truncate leading-snug">
                       {entry.title || 'Video'}
                     </p>
-                    <p className="text-[10px] text-theme-muted mt-0.5">
-                      {formatRelativeTime(entry.at)}
+                    <p className="text-[10px] text-theme-muted mt-0.5 truncate">
+                      {[clips, when].filter(Boolean).join(' · ')}
                     </p>
                   </button>
                 </li>

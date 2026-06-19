@@ -8,7 +8,7 @@
 export function isMontageHighlight(highlight) {
   return (
     highlight?.montage_type === 'shooter_multikill' ||
-    (highlight?.montage_segments?.length >= 2 && highlight?.clip_type === 'shooter_multikill')
+    (highlight?.montage_segments?.length >= 1 && highlight?.clip_type === 'shooter_multikill')
   );
 }
 
@@ -29,8 +29,11 @@ export const HUD_ENGAGEMENT_GAP_SEC = 4.5;
 /** Min seconds between distinct kills in one montage. */
 export const MIN_KILL_PEAK_GAP_SEC = 3.5;
 export const MAX_MONTAGE_KILL_SEGMENTS = 4;
-export const SHOOTER_CLIP_COUNT = 5;
+export const SHOOTER_CLIP_COUNT = 99;
 export const KILLS_PER_CLIP_TARGET = 5;
+/** Max gap between consecutive kills in one burst montage (real multikill round). */
+export const MONTAGE_BURST_MAX_GAP_SEC = 22;
+export const MONTAGE_BURST_MAX_SPAN_SEC = 55;
 /** Max gap between consecutive kills in one jump-cut montage (e.g. 4:25 → 5:32). */
 export const HUD_CLUSTER_MAX_GAP_SEC = 95;
 export const HUD_CLUSTER_MAX_SPAN_SEC = 600;
@@ -39,7 +42,7 @@ export const MIN_MONTAGE_SOURCE_GAP_SEC = 30;
 /** Min VOD span for a montage chain (kills far apart in source). */
 export const MIN_MONTAGE_CHAIN_SPAN_SEC = 75;
 /** Reject montages that jump across unrelated VOD sections. */
-export const MAX_KILL_GAP_IN_MONTAGE_SEC = 95;
+export const MAX_KILL_GAP_IN_MONTAGE_SEC = 22;
 export const PREFERRED_CHAIN_KILLS = 4;
 export const MIN_CHAIN_KILLS = 2;
 
@@ -72,18 +75,41 @@ export const HUD_KILL_TIMING = {
   hudPeakOffsetSec: 0,
 };
 
-/** Red kill-feed anchor: 4s lead (peek) + 2s tail after kill moment. */
+/** Red kill-feed: anchor BEFORE flash (frag first), long post-roll for body drop. */
 export const RED_HIGHLIGHT_KILL_TIMING = {
-  clipBefore: 4,
-  clipAfter: 2,
-  segBefore: 4,
-  segAfter: 2,
-  maxSegDur: 6,
-  minSegDur: 6,
-  maxTotal: 28,
-  hudPeakOffsetSec: 0,
-  fixedKillWindow: true,
+  clipBefore: 2.0,
+  clipAfter: 6.0,
+  segBefore: 2.0,
+  segAfter: 6.0,
+  maxSegDur: 8,
+  minSegDur: 5.5,
+  maxTotal: 32,
+  hudPeakOffsetSec: -1.8,
+  fixedKillWindow: false,
 };
+
+/** POV kills safe for montage chains (identity confirmed, not victim-only OCR). */
+export const TRUSTED_POV_REASONS = new Set([
+  'pov_killer_match',
+  'pov_partial_killer',
+  'pov_partial_any',
+  'pov_partial_victim_foreign',
+  'pov_foreign_killer_ocr',
+  'pov_enemy_killer_field',
+  'pov_assist_swap',
+  'pov_name_in_line',
+]);
+
+export function isTrustedHudKill(event) {
+  if (!event) return false;
+  if (!(event.player_kill || event.red_highlight || event.validated_by === 'red-highlight')) {
+    return false;
+  }
+  const reason = event.pov_reason || '';
+  if (!reason || !TRUSTED_POV_REASONS.has(reason)) return false;
+  if ((event.confidence ?? 0) < 0.55) return false;
+  return true;
+}
 
 /** One kill in a window — longer post-roll for caster reaction, never pad pre-kill. */
 export const SINGLE_KILL_TIMING = {
@@ -102,16 +128,19 @@ export const MAX_KILL_SEG_BEFORE_SEC = 3;
 export const MIN_SHOOTER_MONTAGE_SEC = 12;
 
 /**
- * Anchor on raw_time = when kill-feed UI flashed (visible moment).
- * Small lead so crosshair + shot are in frame; do NOT use shot_time (too early).
+ * Anchor on kill moment: CS2 feed flashes AFTER the frag.
+ * Negative hudPeakOffsetSec shifts cut before raw_time; gunshot snap when available.
  */
-export function resolveHudKillAnchor(killEventOrTime, roi = '') {
+export function resolveHudKillAnchor(killEventOrTime, roi = '', timing = null) {
   const event =
     typeof killEventOrTime === 'object' && killEventOrTime !== null ? killEventOrTime : null;
-  if (event?.kill_anchor_time != null) return event.kill_anchor_time;
+  if (event?.kill_anchor_time != null && !event?.red_highlight && event?.validated_by !== 'red-highlight') {
+    return event.kill_anchor_time;
+  }
   const raw = event?.raw_time ?? event?.time ?? Number(killEventOrTime);
   if (event?.player_kill || event?.red_highlight || event?.validated_by === 'red-highlight') {
-    return Number.isFinite(raw) ? raw : 0;
+    const lag = timing?.hudPeakOffsetSec ?? RED_HIGHLIGHT_KILL_TIMING.hudPeakOffsetSec ?? 0;
+    return Number.isFinite(raw) ? Math.max(0, raw + lag) : 0;
   }
   if (event?.audio_peak_time != null) return Math.max(0, event.audio_peak_time - 0.2);
   const r = event?.roi ?? roi;
@@ -216,13 +245,24 @@ export function buildKillSegmentAtAnchor(
   videoDuration,
   timing = HUD_KILL_TIMING,
   nextKillEvent = null,
+  audioScan = null,
 ) {
   const event = typeof killEvent === 'object' && killEvent !== null ? killEvent : { time: killEvent };
-  const anchor = resolveHudKillAnchor(event);
+  let anchor = resolveHudKillAnchor(event, event?.roi ?? '', timing);
+  const rawHud = getHudEventTime(event);
+  if (
+    audioScan &&
+    (event.player_kill || event.red_highlight || event.validated_by === 'red-highlight')
+  ) {
+    const snapped = snapPeakToGunshot(rawHud, audioScan);
+    if (snapped > 0 && Math.abs(snapped - rawHud) <= 2.8) {
+      anchor = snapped;
+    }
+  }
   const segBefore = timing.segBefore ?? timing.clipBefore ?? effectiveSegBefore(timing);
   let segAfter = timing.segAfter ?? timing.clipAfter ?? 4.5;
   if (!timing.fixedKillWindow && nextKillEvent) {
-    const nextAnchor = resolveHudKillAnchor(nextKillEvent);
+    const nextAnchor = resolveHudKillAnchor(nextKillEvent, nextKillEvent?.roi ?? '', timing);
     const maxAfter = nextAnchor - anchor - 0.25;
     segAfter = Math.min(segAfter, Math.max(0.9, maxAfter));
   }
@@ -256,13 +296,18 @@ export function buildKillSegmentAtAnchor(
  * Build jump-cut segments directly from HUD kill-feed timeline (primary CS2 path).
  * start/duration always derived from peak_time — no audio back-snap.
  */
-export function buildHudKillMontageSegments(killEvents, videoDuration, timing = HUD_KILL_TIMING) {
+export function buildHudKillMontageSegments(
+  killEvents,
+  videoDuration,
+  timing = HUD_KILL_TIMING,
+  audioScan = null,
+) {
   const kills = dedupeHudKillEvents(killEvents, MIN_KILL_PEAK_GAP_SEC, MAX_MONTAGE_KILL_SEGMENTS);
   if (kills.length < 2) return null;
 
   const montage_segments = [];
   for (let i = 0; i < kills.length; i++) {
-    const seg = buildKillSegmentAtAnchor(kills[i], videoDuration, timing, kills[i + 1]);
+    const seg = buildKillSegmentAtAnchor(kills[i], videoDuration, timing, kills[i + 1], audioScan);
     if (!seg) continue;
     seg.confidence = kills[i].confidence;
     seg.hud_roi = kills[i].roi;
@@ -436,7 +481,7 @@ export function appendPayoffSegment(built, payoffPeak, videoDuration, timing = P
 /** Normalize highlight/candidate metadata after montage is built or cut. */
 export function finalizeMontageHighlight(highlight) {
   const segments = highlight?.montage_segments;
-  if (!segments?.length || segments.length < 2) return highlight;
+  if (!segments?.length) return highlight;
 
   const summed = sumMontageDuration(segments);
   const measured = Number(highlight.clip_duration_measured);
@@ -750,15 +795,15 @@ export function montagesShareKill(a, b, gapSec = 3) {
 }
 
 /**
- * Build up to N montages from LOCAL kill chains (kills within ~14s), not round-robin
- * across the full VOD. Each clip = multikill moment back-to-back.
+ * Score burst chains: tight multikill rounds win; wide stitched chains lose.
  */
-function chainFalsePositivePenalty(chain) {
+function chainBurstScoreAdjust(chain) {
   const k = chain.killCount || 0;
   const span = chain.span || 0;
-  if (k >= 2 && span < MIN_MONTAGE_CHAIN_SPAN_SEC) return 120;
-  if (k >= 3 && span < 120) return 80;
-  if (k >= 4 && span < 180) return 40;
+  if (span <= MONTAGE_BURST_MAX_GAP_SEC) return 70 + k * 22;
+  if (span <= MONTAGE_BURST_MAX_SPAN_SEC) return 35 + k * 12;
+  if (span > 90) return -120 - k * 8;
+  if (span > 60) return -70 - k * 5;
   return 0;
 }
 
@@ -814,9 +859,91 @@ export function buildWideGapKillChains(
   return kept;
 }
 
-export function buildKillMontagePacks(events, videoDuration, options = {}) {
-  const clipCount = options.clipCount ?? SHOOTER_CLIP_COUNT;
+/** Greedy partition: every kill in exactly one pack (burst groups ≤4, rest solo). */
+export function partitionKillsIntoBurstPacks(
+  events,
+  {
+    maxGapSec = MONTAGE_BURST_MAX_GAP_SEC,
+    maxKills = MAX_MONTAGE_KILL_SEGMENTS,
+    maxSpanSec = MONTAGE_BURST_MAX_SPAN_SEC,
+  } = {},
+) {
+  const sorted = [...(events || [])]
+    .filter((e) => e && Number.isFinite(getHudEventTime(e)))
+    .sort((a, b) => getHudEventTime(a) - getHudEventTime(b));
+  if (!sorted.length) return [];
 
+  const packs = [];
+  let current = [sorted[0]];
+
+  for (let i = 1; i < sorted.length; i++) {
+    const gap = getHudEventTime(sorted[i]) - getHudEventTime(current[current.length - 1]);
+    const span = getHudEventTime(sorted[i]) - getHudEventTime(current[0]);
+    if (gap <= maxGapSec && current.length < maxKills && span <= maxSpanSec) {
+      current.push(sorted[i]);
+    } else {
+      packs.push({ kills: current });
+      current = [sorted[i]];
+    }
+  }
+  packs.push({ kills: current });
+  return packs;
+}
+
+/** One clip per pack: 1 kill = single segment, 2–4 kills = jump-cut montage. */
+export function buildHudKillClipFromPack(kills, videoDuration, options = {}) {
+  const list = dedupeHudKillEvents(kills, MIN_KILL_PEAK_GAP_SEC, MAX_MONTAGE_KILL_SEGMENTS);
+  if (!list.length) return null;
+
+  const audioScan = options.audioScan;
+  const timing = list.some(
+    (k) => k.player_kill || k.red_highlight || k.validated_by === 'red-highlight',
+  )
+    ? RED_HIGHLIGHT_KILL_TIMING
+    : HUD_KILL_TIMING;
+
+  if (list.length === 1) {
+    const seg = buildKillSegmentAtAnchor(list[0], videoDuration, timing, null, audioScan);
+    if (!seg || seg.duration < 3) return null;
+    const montage_segments = [{ ...seg, segment_type: 'kill', confidence: list[0].confidence }];
+    const output_duration = seg.duration;
+    const span = 0;
+    return {
+      montage_type: 'shooter_multikill',
+      clip_type: 'shooter_multikill',
+      montage_kill_count: 1,
+      start: seg.start,
+      end: Math.round((seg.start + seg.duration) * 10) / 10,
+      start_time: seg.start,
+      end_time: Math.round((seg.start + seg.duration) * 10) / 10,
+      local_score: 72,
+      composite: 72,
+      flags: ['hud-kills', 'single-kill', 'hud-chain'],
+      montage_segments,
+      output_duration,
+      source_span_start: seg.start,
+      source_span_end: Math.round((seg.start + seg.duration) * 10) / 10,
+      confidence: Math.min(95, Math.round((list[0].confidence ?? 0.5) * 100)),
+      arcLabel: 'hud-kill-chain',
+      chain_span: span,
+      hudKills: 1,
+      hypeMoment: false,
+      excerpt: `1 kill · ${output_duration}s clip`,
+    };
+  }
+
+  const built = buildHudMontageCandidate({ kills: list }, videoDuration, options);
+  if (!built) return null;
+  const span =
+    getHudEventTime(list[list.length - 1]) - getHudEventTime(list[0]);
+  return { ...built, chain_span: Math.round(span * 10) / 10 };
+}
+
+/**
+ * Full kill coverage: every detected POV kill → exactly one clip segment.
+ * Bursts (≤22s apart) become 2–4 kill montages; isolated kills become solo clips.
+ */
+export function buildKillMontagePacks(events, videoDuration, options = {}) {
   let engagements = events;
   if (!events.some((e) => e.validated_by === 'red-highlight' || e.validated_by === 'audio+hud')) {
     engagements = collapseHudEngagements(events, options.audioScan);
@@ -827,80 +954,18 @@ export function buildKillMontagePacks(events, videoDuration, options = {}) {
     }
   }
 
-  const useWideGap = engagements.some((e) => e.player_kill || e.red_highlight || e.validated_by === 'red-highlight');
-  let chains = useWideGap
-    ? buildWideGapKillChains(engagements)
-    : buildSlidingKillChains(engagements);
+  if (!engagements.length) return [];
 
-  if (!chains.length && useWideGap && engagements.length >= MIN_CHAIN_KILLS) {
-    console.log(
-      `[montage] no wide-gap chains (min ${MIN_MONTAGE_SOURCE_GAP_SEC}s between kills, ` +
-        `span >= ${MIN_MONTAGE_CHAIN_SPAN_SEC}s) from ${engagements.length} events`,
-    );
-  }
-  if (!chains.length) return [];
+  const packs = partitionKillsIntoBurstPacks(engagements);
+  const selected = packs
+    .map((pack) => buildHudKillClipFromPack(pack.kills, videoDuration, options))
+    .filter((clip) => clip && isCoherentKillMontage(clip));
 
-  const buildCandidates = (chainList, wideGap) =>
-    chainList
-      .map((chain) => {
-        const built = buildHudMontageCandidate(chain, videoDuration, options);
-        if (!built || !isCoherentKillMontage(built, { wideGap })) return null;
-        const clusterScore = scoreHudKillCluster(chain);
-        const span = Math.round(chain.span * 10) / 10;
-        const k = built.montage_kill_count || chain.killCount;
-        const fpPenalty = chainFalsePositivePenalty(chain);
-        const score = 90 + k * 34 + clusterScore * 0.65 + Math.min(span, 60) * 0.4 - fpPenalty;
-        return {
-          ...built,
-          clusterScore,
-          flags: ['hud-kills', 'multikill-montage', 'hud-chain'],
-          arcLabel: 'hud-kill-chain',
-          local_score: score,
-          composite: score,
-          excerpt: `${k} kills in ${span}s VOD · ${built.output_duration}s montage`,
-          hypeMoment: k >= 3 && span >= 25,
-        };
-      })
-      .filter(Boolean)
-      .sort((a, b) => {
-        const kA = a.montage_kill_count || 0;
-        const kB = b.montage_kill_count || 0;
-        if (kB !== kA) return kB - kA;
-        return (b.clusterScore || 0) - (a.clusterScore || 0);
-      });
-
-  let candidates = buildCandidates(chains, useWideGap);
-
-  if (!candidates.length && useWideGap) {
-    const sliding = buildSlidingKillChains(engagements);
-    if (sliding.length) {
-      console.log(
-        `[montage] wide-gap coherence miss — fallback to ${sliding.length} local sliding chains`,
-      );
-      chains = sliding;
-      candidates = buildCandidates(sliding, false);
-    }
-  }
-
-  const selected = [];
-  const pick = (minKills) => {
-    for (const c of candidates) {
-      if (selected.length >= clipCount) break;
-      if ((c.montage_kill_count || 0) < minKills) continue;
-      if (selected.some((s) => montagesShareKill(s, c))) continue;
-      selected.push(c);
-    }
-  };
-
-  pick(3);
-  if (selected.length < clipCount) pick(2);
-
-  const killHist = selected
-    .map((c) => c.montage_kill_count)
-    .join('+');
+  const totalSegs = selected.reduce((n, c) => n + (c.montage_kill_count || 0), 0);
+  const killHist = selected.map((c) => c.montage_kill_count).join('+');
   console.log(
-    `[montage] HUD chains: ${chains.length} windows → ${candidates.length} montages → ` +
-      `${selected.length} clips (${killHist || 'none'}, no shared kills)`,
+    `[montage] full coverage: ${engagements.length} kills → ${selected.length} clips ` +
+      `(${totalSegs} segments, packs=${killHist || 'none'})`,
   );
   const sample = selected[0]?.montage_segments?.[0];
   if (sample) {
@@ -933,22 +998,47 @@ export function montageUsesWideSourceGaps(candidate) {
   return false;
 }
 
-/** Reject montages that jump across the VOD (e.g. kill at 19s then 400s). */
-export function isCoherentKillMontage(candidate, { wideGap } = {}) {
+/** Reject montages that jump across the VOD (e.g. kill at 19s then 400s).
+ * 
+ * IMPORTANT: Never allow wide-gap montages that stitch kills from distant parts
+ * of the VOD together. This creates incoherent clips with large dead time.
+ * Each montage must represent a single local combat sequence.
+ */
+export function isCoherentKillMontage(candidate) {
   const segs = (candidate?.montage_segments || []).filter((s) => s.segment_type !== 'payoff');
-  if (segs.length < 2) return false;
-  const useWideGap = wideGap ?? montageUsesWideSourceGaps(candidate);
-  if (!useWideGap) {
-    for (let i = 1; i < segs.length; i++) {
-      const prev = segs[i - 1].peak_time ?? segs[i - 1].start;
-      const curr = segs[i].peak_time ?? segs[i].start;
-      if (curr - prev > MAX_KILL_GAP_IN_MONTAGE_SEC) return false;
+  if (segs.length < 1) return false;
+  if (segs.length === 1) return true;
+  
+  // STRICT: Always check for wide gaps - never allow wide-gap stitching
+  // This enforces the rule: kills in a montage must be from a single local sequence
+  for (let i = 1; i < segs.length; i++) {
+    const prev = segs[i - 1].peak_time ?? segs[i - 1].start;
+    const curr = segs[i].peak_time ?? segs[i].start;
+    const gap = curr - prev;
+    // Log wide gaps for debugging but always reject them
+    if (gap > MAX_KILL_GAP_IN_MONTAGE_SEC) {
+      console.log(`[montage-coherence] REJECTED: gap ${gap.toFixed(1)}s > ${MAX_KILL_GAP_IN_MONTAGE_SEC}s (kill ${i} to ${i+1})`);
+      return false;
     }
   }
+  
   const span =
     (segs[segs.length - 1].peak_time ?? segs[segs.length - 1].start) -
     (segs[0].peak_time ?? segs[0].start);
-  return span <= HUD_CLUSTER_MAX_SPAN_SEC;
+  
+  // Reject if total span too long for a burst montage
+  if (span > MONTAGE_BURST_MAX_SPAN_SEC) {
+    console.log(`[montage-coherence] REJECTED: span ${span.toFixed(1)}s > ${MONTAGE_BURST_MAX_SPAN_SEC}s (burst limit)`);
+    return false;
+  }
+  
+  // Reject if span exceeds absolute maximum
+  if (span > HUD_CLUSTER_MAX_SPAN_SEC) {
+    console.log(`[montage-coherence] REJECTED: span ${span.toFixed(1)}s > ${HUD_CLUSTER_MAX_SPAN_SEC}s (absolute limit)`);
+    return false;
+  }
+  
+  return true;
 }
 
 /**
@@ -963,11 +1053,19 @@ export function buildHudMontageCandidate(cluster, videoDuration, options = {}) {
   }
   if (kills.length < 2) return null;
 
-  const timing =
-    kills.some((k) => k.player_kill || k.red_highlight || k.validated_by === 'red-highlight')
-      ? RED_HIGHLIGHT_KILL_TIMING
-      : HUD_KILL_TIMING;
-  const built = buildHudKillMontageSegments(kills, videoDuration, timing);
+  // Choose timing profile based on the majority of kills
+  // Red-highlight timing is for kills confirmed via visual red border
+  // HUD timing is for kills detected via OCR text matching
+  const redHighlightKills = kills.filter((k) => 
+    k.red_highlight || k.validated_by === 'red-highlight' || k.method?.includes('red-highlight')
+  ).length;
+  
+  // Use red-highlight timing only if majority (>50%) are red-highlight kills
+  // This prevents mixing timing profiles in a single montage
+  const useRedHighlightTiming = redHighlightKills >= kills.length / 2;
+  
+  const timing = useRedHighlightTiming ? RED_HIGHLIGHT_KILL_TIMING : HUD_KILL_TIMING;
+  const built = buildHudKillMontageSegments(kills, videoDuration, timing, audioScan);
   if (!built?.montage_segments?.length || built.montage_segments.length < 2) return null;
 
   const avgConf =

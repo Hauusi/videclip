@@ -296,6 +296,7 @@ router.post('/clip', async (req, res) => {
               'fire',
             webcam: settings.webcam,
             clipLocalTimestamps: true,
+            gameplayFraming: settings.gameplayFraming || exportRender.gameplayFraming || 'wide',
             preview: false,
             outputName,
           },

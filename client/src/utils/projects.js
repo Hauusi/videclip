@@ -1,3 +1,5 @@
+import { formatTime, getHighlightDisplayDuration } from './helpers';
+
 export const UNSAVED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 export function buildProjectFromAnalysis(completed, historyKey, fallbackTitle) {
@@ -33,13 +35,118 @@ export function daysUntilExpiry(expiresAt) {
   return Math.ceil(diff / (24 * 60 * 60 * 1000));
 }
 
+export function formatRelativeTime(ts) {
+  const diff = Date.now() - Number(ts);
+  if (!Number.isFinite(diff) || diff < 0) return '';
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'gerade eben';
+  if (mins < 60) return `vor ${mins} Min.`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `vor ${hrs} Std.`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `vor ${days} T.`;
+  return new Date(Number(ts)).toLocaleDateString('de-DE', { day: 'numeric', month: 'short' });
+}
+
+export function projectClipLabel(count) {
+  const n = Number(count) || 0;
+  if (n <= 0) return 'Analyse öffnen';
+  return n === 1 ? '1 Clip' : `${n} Clips`;
+}
+
+/** Max kill count across highlights in snapshot (for library sort + meta). */
+export function projectPeakKills(project) {
+  const highlights = project?.resultSnapshot?.highlights || [];
+  let max = 0;
+  for (const h of highlights) {
+    const k = h.montage_kill_count || h.montage_segments?.length || 0;
+    if (k > max) max = k;
+  }
+  return max;
+}
+
+/** Longest clip duration in snapshot (seconds). */
+export function projectPeakDuration(project) {
+  const highlights = project?.resultSnapshot?.highlights || [];
+  let max = 0;
+  for (const h of highlights) {
+    const d = getHighlightDisplayDuration(h);
+    if (d > max) max = d;
+  }
+  return max > 0 ? max : null;
+}
+
+export function projectPreviewUrl(project) {
+  const highlights = project?.resultSnapshot?.highlights || [];
+  const top = [...highlights].sort(
+    (a, b) =>
+      (b.montage_kill_count || b.montage_segments?.length || 0) -
+      (a.montage_kill_count || a.montage_segments?.length || 0),
+  )[0];
+  return top?.overviewUrl || top?.plainPreviewUrl || null;
+}
+
+export const LIBRARY_SORT_OPTIONS = [
+  { id: 'date', label: 'Datum' },
+  { id: 'kills', label: 'Kills' },
+  { id: 'title', label: 'Titel' },
+];
+
+export function filterLibraryProjects(projects, { tab = 'all', query = '' } = {}) {
+  let list = projects;
+  if (tab === 'saved') list = list.filter((p) => p.saved);
+  if (tab === 'expiring') {
+    list = list.filter((p) => {
+      if (p.saved) return false;
+      const days = daysUntilExpiry(p.expiresAt);
+      return days != null && days <= 3;
+    });
+  }
+  const q = String(query || '').trim().toLowerCase();
+  if (q) list = list.filter((p) => (p.title || '').toLowerCase().includes(q));
+  return list;
+}
+
+export function sortLibraryProjects(projects, sortBy = 'date') {
+  const list = [...projects];
+  switch (sortBy) {
+    case 'title':
+      return list.sort((a, b) => (a.title || '').localeCompare(b.title || '', 'de'));
+    case 'kills':
+      return list.sort(
+        (a, b) =>
+          projectPeakKills(b) - projectPeakKills(a) ||
+          (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt),
+      );
+    default:
+      return list.sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt));
+  }
+}
+
+export function projectMetaLine(project) {
+  const parts = [];
+  const n = Number(project.clipCount) || 0;
+  if (n > 0) {
+    parts.push(n === 1 ? '1 Clip' : `${n} Clips`);
+    const kills = projectPeakKills(project);
+    const dur = projectPeakDuration(project);
+    if (kills > 0) parts.push(kills === 1 ? '1 Kill' : `bis ${kills} Kills`);
+    else if (dur) parts.push(formatTime(dur));
+  } else {
+    parts.push('Analyse öffnen');
+  }
+  const rel = formatRelativeTime(project.updatedAt || project.createdAt);
+  if (rel) parts.push(rel);
+  return parts.join(' · ');
+}
+
 export function expiryLabel(project) {
   if (project.saved) return null;
   const days = daysUntilExpiry(project.expiresAt);
-  if (days == null) return null;
-  if (days <= 0) return 'Läuft ab';
-  if (days === 1) return '1 Tag vor Ablauf';
-  return `${days} Tage vor Ablauf`;
+  if (days == null || days > 3) return null;
+  if (days <= 0) return 'Läuft heute ab';
+  if (days === 1) return 'Noch 1 Tag';
+  return `Noch ${days} Tage`;
 }
 
 export function mergeProjectLists(localProjects, serverProjects) {

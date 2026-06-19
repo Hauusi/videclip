@@ -1,6 +1,6 @@
 /**
  * CS2 POV kills from two-pass kill-feed (red border + OCR anchor).
- * Clip window = -4s / +2s around anchor (see RED_HIGHLIGHT_KILL_TIMING).
+ * Clip window = -3.5s / +4.5s around anchor (see RED_HIGHLIGHT_KILL_TIMING).
  *
  * NOTE: the spawn/warmup filter lives exclusively in
  * kill_feed_pipeline.py (spawn_cutoff_sec). Do not re-add it here.

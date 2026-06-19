@@ -30,20 +30,20 @@ export default function ImportHero({
       <div
         className={`import-hero-content relative z-10 flex flex-col items-center min-h-0 px-4 sm:px-6 ${
           hasProjects
-            ? 'justify-start flex-shrink-0'
+            ? 'import-hero-content--with-rail justify-start flex-shrink-0'
             : 'justify-center flex-1'
         }`}
       >
         <div className="w-full max-w-2xl text-center space-y-8">
-          <div className="space-y-3">
-            <p className="text-2xs font-semibold uppercase tracking-[0.2em] text-peak-purple">
+          <div className="space-y-4">
+            <p className="text-2xs font-semibold uppercase tracking-[0.22em] text-peak-purple">
               Only the peaks
             </p>
-            <h1 className="text-2xl sm:text-3xl font-bold text-theme tracking-tight">
+            <h1 className="type-display text-2xl sm:text-[2rem] font-bold text-theme tracking-tight leading-tight">
               Link oder Datei —{' '}
               <span className="gradient-text-clip">virale Clips</span> in Minuten
             </h1>
-            <p className="text-sm text-theme-muted max-w-md mx-auto leading-relaxed">
+            <p className="text-sm sm:text-base text-theme-muted max-w-lg mx-auto leading-relaxed">
               YouTube-Link einfügen oder Video hochladen. PeakClip findet die besten Momente und
               bereitet Hook, Untertitel und Export vor.
             </p>
@@ -73,15 +73,11 @@ export default function ImportHero({
             </div>
           )}
 
-          <div className="flex flex-wrap justify-center gap-2">
+          <div className="flex flex-wrap justify-center gap-2 pt-1">
             {FEATURES.map((f) => (
               <span
                 key={f.label}
-                className="inline-flex items-center gap-1.5 text-xs text-theme-muted border rounded-full px-3 py-1.5"
-                style={{
-                  background: 'color-mix(in srgb, var(--t-text) 3%, transparent)',
-                  borderColor: 'var(--t-border)',
-                }}
+                className="import-feature-pill"
               >
                 <span aria-hidden>{f.icon}</span>
                 {f.label}

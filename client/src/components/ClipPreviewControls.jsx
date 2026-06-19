@@ -2,14 +2,17 @@ import { useCallback, useEffect, useState } from 'react';
 import { formatTime } from '../utils/helpers';
 
 /**
- * Clip-relative playback bar — one time display for live-trim (source seek) and rendered clips.
+ * Clip-relative playback bar — live-trim, montage jump-cuts, or rendered file.
  */
 export default function ClipPreviewControls({
   videoRef,
+  mediaKey = '',
   mode = 'file',
   startTime = 0,
   endTime = 0,
   totalSec,
+  outputCurrentSec = 0,
+  onSeekOutput,
   className = '',
 }) {
   const [playing, setPlaying] = useState(false);
@@ -19,11 +22,18 @@ export default function ClipPreviewControls({
   const clipDuration =
     mode === 'live'
       ? Math.max(0.5, endTime - startTime)
-      : Math.max(0.5, duration || totalSec || 0);
+      : mode === 'montage'
+        ? Math.max(0.5, totalSec || 0)
+        : Math.max(0.5, duration || totalSec || 0);
 
   const syncFromVideo = useCallback(() => {
     const v = videoRef?.current;
     if (!v) return;
+    if (mode === 'montage') {
+      setCurrent(Math.max(0, Math.min(clipDuration, outputCurrentSec)));
+      setPlaying(!v.paused && !v.ended);
+      return;
+    }
     if (mode === 'live') {
       const rel = Math.max(0, Math.min(clipDuration, v.currentTime - startTime));
       setCurrent(rel);
@@ -35,32 +45,70 @@ export default function ClipPreviewControls({
     const t = v.currentTime;
     if (Number.isFinite(t)) setCurrent(Math.max(0, t));
     setPlaying(!v.paused && !v.ended);
-  }, [videoRef, mode, startTime, clipDuration]);
+  }, [videoRef, mode, startTime, clipDuration, outputCurrentSec]);
 
   useEffect(() => {
-    const v = videoRef?.current;
-    if (!v) return undefined;
+    if (mode === 'montage') {
+      setDuration(clipDuration);
+      setCurrent(Math.max(0, Math.min(clipDuration, outputCurrentSec)));
+      const v = videoRef?.current;
+      if (v) setPlaying(!v.paused && !v.ended);
+      return undefined;
+    }
 
-    const onTime = () => syncFromVideo();
-    const onPlay = () => setPlaying(true);
-    const onPause = () => setPlaying(false);
-    const onMeta = () => syncFromVideo();
+    let disposed = false;
+    let cleanup = () => {};
 
-    v.addEventListener('timeupdate', onTime);
-    v.addEventListener('play', onPlay);
-    v.addEventListener('pause', onPause);
-    v.addEventListener('loadedmetadata', onMeta);
-    v.addEventListener('seeked', onMeta);
-    syncFromVideo();
+    const attach = () => {
+      const v = videoRef?.current;
+      if (!v || disposed) return false;
+
+      const onTime = () => syncFromVideo();
+      const onPlay = () => {
+        setPlaying(true);
+        syncFromVideo();
+      };
+      const onPause = () => {
+        setPlaying(false);
+        syncFromVideo();
+      };
+      const onMeta = () => syncFromVideo();
+
+      v.addEventListener('timeupdate', onTime);
+      v.addEventListener('play', onPlay);
+      v.addEventListener('pause', onPause);
+      v.addEventListener('loadedmetadata', onMeta);
+      v.addEventListener('seeked', onMeta);
+      v.addEventListener('ended', onPause);
+      syncFromVideo();
+
+      cleanup = () => {
+        v.removeEventListener('timeupdate', onTime);
+        v.removeEventListener('play', onPlay);
+        v.removeEventListener('pause', onPause);
+        v.removeEventListener('loadedmetadata', onMeta);
+        v.removeEventListener('seeked', onMeta);
+        v.removeEventListener('ended', onPause);
+      };
+      return true;
+    };
+
+    if (!attach()) {
+      const timer = window.setInterval(() => {
+        if (attach()) window.clearInterval(timer);
+      }, 50);
+      return () => {
+        disposed = true;
+        window.clearInterval(timer);
+        cleanup();
+      };
+    }
 
     return () => {
-      v.removeEventListener('timeupdate', onTime);
-      v.removeEventListener('play', onPlay);
-      v.removeEventListener('pause', onPause);
-      v.removeEventListener('loadedmetadata', onMeta);
-      v.removeEventListener('seeked', onMeta);
+      disposed = true;
+      cleanup();
     };
-  }, [videoRef, syncFromVideo, mode, startTime, endTime]);
+  }, [videoRef, syncFromVideo, mode, startTime, endTime, mediaKey, clipDuration, outputCurrentSec]);
 
   useEffect(() => {
     if (mode === 'live') {
@@ -82,16 +130,31 @@ export default function ClipPreviewControls({
           }
         }
       }
-      v.play().catch(() => {});
+      if (mode === 'montage' && onSeekOutput && outputCurrentSec >= clipDuration - 0.05) {
+        onSeekOutput(0);
+      }
+      v.play()
+        .then(() => {
+          setPlaying(true);
+          syncFromVideo();
+        })
+        .catch(() => {});
     } else {
       v.pause();
+      setPlaying(false);
+      syncFromVideo();
     }
   };
 
   const seekRatio = (ratio) => {
+    const r = Math.max(0, Math.min(1, ratio));
+    if (mode === 'montage') {
+      onSeekOutput?.(r * clipDuration);
+      setCurrent(r * clipDuration);
+      return;
+    }
     const v = videoRef?.current;
     if (!v) return;
-    const r = Math.max(0, Math.min(1, ratio));
     if (mode === 'live') {
       try {
         v.currentTime = startTime + r * clipDuration;
@@ -109,6 +172,7 @@ export default function ClipPreviewControls({
       /* ignore */
     }
     setCurrent(r * d);
+    syncFromVideo();
   };
 
   const onBarClick = (e) => {

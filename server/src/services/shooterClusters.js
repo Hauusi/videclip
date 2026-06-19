@@ -42,19 +42,33 @@ const PAYOFF_KEYWORDS = /\b(defus|defuse|defusing|plant|planted|bombe|bomb|clutc
 export const SPAWN_WINDOW_SEC = 90;
 export const EARLY_VOD_SEC = 150;
 
-/** HUD flash without kill OCR (defuse UI, scoreboard) — reject as kill peak. */
+/** HUD flash without kill OCR (defuse UI, scoreboard) — reject as kill peak.
+ * 
+ * Note: bottom_kills ROI is now included as it shows multikill icons which are
+ * high-confidence POV kill indicators (the streamer's kill streak).
+ */
 export function isConfirmedHudKill(event) {
   if (!event || event.confidence < 0.4) return false;
   const roi = event.roi || '';
   const text = (event.text || '').trim();
+  
+  // Reject payoff/boring UI elements that aren't kills
   if (text && PAYOFF_KEYWORDS.test(text) && !KILL_KEYWORDS.test(text)) return false;
   if (text && SHOOTER_BORING_PATTERNS.test(text) && !KILL_KEYWORDS.test(text)) return false;
-  if (roi === 'bottom_kills') return false;
+  
+  // bottom_kills ROI shows multikill icons - high confidence for POV
+  // These are the streamer's own kill streak indicators
+  if (roi === 'bottom_kills') {
+    // Require higher confidence for bottom_kills since there's no OCR text
+    return event.confidence >= 0.65 && (event.player_kill || event.activity >= 0.15);
+  }
+  
   if (roi.startsWith('top_right')) {
     if (event.player_kill || event.red_highlight) return true;
     if ((event.method || '').includes('red-highlight')) return true;
     return (event.highlight_score ?? 0) >= 0.03;
   }
+  
   if (text && KILL_KEYWORDS.test(text)) return true;
   if (text) return false;
   return event.confidence >= 0.72 && (event.activity || 0) >= 0.1;
@@ -62,7 +76,9 @@ export function isConfirmedHudKill(event) {
 
 /**
  * Stricter gate for montage clips — rejects spawn/round-start HUD noise.
- * Kill-feed top-right only (bottom_kills icons are unreliable on this layout).
+ * 
+ * Now includes bottom_kills ROI for multikill detection (high confidence when
+ * the streamer gets multiple kills in quick succession).
  */
 export function isQualityHudKill(event, context = {}) {
   if (!event || !isConfirmedHudKill(event)) return false;
@@ -72,7 +88,16 @@ export function isQualityHudKill(event, context = {}) {
   const roi = event.roi || '';
   const all = context.allEvents || [];
 
-  if (roi === 'bottom_kills') return false;
+  // bottom_kills ROI shows multikill icons - very reliable for POV streaks
+  if (roi === 'bottom_kills') {
+    // Require high confidence and player_kill flag or high activity
+    // These are the gold standard for POV multikills
+    if (event.player_kill && event.confidence >= 0.7) return true;
+    if (event.confidence >= 0.8 && (event.activity || 0) >= 0.2) return true;
+    // Reject if in spawn window (warmup icons)
+    if (t < SPAWN_WINDOW_SEC) return false;
+    return false;
+  }
 
   if (roi.startsWith('top_right')) {
     if (event.player_kill || event.red_highlight || event.validated_by) return true;
@@ -83,11 +108,11 @@ export function isQualityHudKill(event, context = {}) {
   if ((roi === 'center_banner' || roi === 'top_left') && !text) return false;
   if (text && !KILL_KEYWORDS.test(text)) return false;
 
-  if (t < SPAWN_WINDOW_SEC && roi !== 'bottom_kills') {
+  if (t < SPAWN_WINDOW_SEC) {
     if (!text || (event.confidence ?? 0) < 0.72) return false;
   }
 
-  if (t < EARLY_VOD_SEC && roi !== 'bottom_kills' && !text) {
+  if (t < EARLY_VOD_SEC && !text) {
     const near = all.filter((o) => o !== event && Math.abs(o.time - t) <= 6);
     const spawnPair =
       near.length >= 1 &&
@@ -98,16 +123,40 @@ export function isQualityHudKill(event, context = {}) {
   return (event.confidence ?? 0) >= 0.55;
 }
 
-/** Gunshot spike must land near HUD flash — rejects UI-only false positives. */
+/** Gunshot spike must land near HUD flash — rejects UI-only false positives.
+ * 
+ * Checks for specific gunshot peaks (not just general audio energy) near the event.
+ * This prevents accepting HUD flashes from UI changes (scoreboard, chat) as kills.
+ */
 export function hasCombatAudioNear(event, audioScan, { beforeSec = 2.2, afterSec = 0.6, minDelta = 4.2 } = {}) {
-  if (!audioScan?.delta?.length) return true;
+  if (!audioScan) return true;  // Pass if no audio data available
+  
   const t = getHudEventTime(event);
   const bucketSec = audioScan.bucketSec || 0.5;
-  const lo = Math.max(0, Math.floor((t - beforeSec) / bucketSec));
-  const hi = Math.min(audioScan.delta.length - 1, Math.ceil((t + afterSec) / bucketSec));
-  for (let i = lo; i <= hi; i++) {
-    if ((audioScan.delta[i] ?? 0) >= minDelta) return true;
+  
+  // First, check for specific gunshot peaks (more reliable)
+  // These are the peaks detected by findAudioPeaks in audioEnergyScan.js
+  if (audioScan.peaks?.length > 0) {
+    // Look for a gunshot peak within the window
+    const hasGunshotPeak = audioScan.peaks.some((peak) => {
+      const peakTime = peak.time ?? (peak.index * bucketSec);
+      const timeDiff = peakTime - t;
+      // Gunshot usually happens slightly before or at the same time as HUD flash
+      // Allow small negative time (gunshot before HUD) and positive (simultaneous)
+      return timeDiff >= -beforeSec && timeDiff <= afterSec && (peak.delta ?? 0) >= minDelta;
+    });
+    if (hasGunshotPeak) return true;
   }
+  
+  // Fallback: Check audio delta buckets if no specific peaks available
+  if (audioScan.delta?.length > 0) {
+    const lo = Math.max(0, Math.floor((t - beforeSec) / bucketSec));
+    const hi = Math.min(audioScan.delta.length - 1, Math.ceil((t + afterSec) / bucketSec));
+    for (let i = lo; i <= hi; i++) {
+      if ((audioScan.delta[i] ?? 0) >= minDelta) return true;
+    }
+  }
+  
   return false;
 }
 

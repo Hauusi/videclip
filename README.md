@@ -4,7 +4,7 @@ YouTube/VOD → AI highlights → vertical clips (Shorts, TikTok, Reels).
 
 > **Living documentation.** This file is the single source of truth for architecture, pipeline behaviour, and production deploy. **Agents must update it in the same session** when adding, removing, or changing features (see `AGENTS.md` and `.cursor/rules/readme-sync.mdc`).
 
-**Last updated:** 2026-06-14 (POV from OCR cluster + montage wide-gap fix)
+**Last updated:** 2026-06-19 (Shooter pipeline bugfixes — gamertag validation, POV detection, montage coherence)
 
 ---
 
@@ -56,7 +56,7 @@ Download → Transcript (YouTube or Groq STT) → Category (gameCategory + visua
 | Category | `gameCategory.js`, `gameVisualDetect.js` | CS2 → `shooter` profile |
 | Highlights | `claude.js`, `highlightCandidates.js` | Shooter bypasses linear Claude clips |
 | Cut | `ffmpeg.js` | `cutMontageClip()` for jump-cut montages |
-| Render | `ffmpeg.js`, `captionPipeline.js` | Montage clips skip caption burn |
+| Render | `ffmpeg.js`, `smartCrop.js`, `captionPipeline.js` | Landscape 9:16: blur-letterbox (full gameplay width); montage clips skip caption burn |
 
 ---
 
@@ -83,6 +83,7 @@ audioEnergyScan → hudKillFeed (Python ROI scan) → filterQualityHudKills
 | `server/src/services/highlightCandidates.js` | `injectHudMontageCandidates` |
 | `server/src/services/shooterHighlightSelect.js` | Pick 5 montages, dedupe by kill time |
 | `server/src/services/ffmpeg.js` | `cutMontageClip`, hybrid seek per segment |
+| `server/src/services/smartCrop.js` | 9:16 framing: **Wide** = 16:9 + blur; **Crop** = 4:3 + blur; **Fill** = classic center 9:16 strip |
 
 ### Timing (HUD kill segment)
 
@@ -99,8 +100,8 @@ audioEnergyScan → hudKillFeed (Python ROI scan) → filterQualityHudKills
 2. **`bottom_kills` ROI** = streamer multikill icons (highest trust)
 3. **Chains only** — kills within `HUD_CLUSTER_MAX_GAP_SEC` (18s); **never round-robin across full VOD**
 4. **POV kills** — Python: red-border feed line + OCR name ≈ POV cluster (`llipeepfan-` variants); **not** YouTube channel/title
-5. Prefer **3–4 kill** chains; 2-kill chains as fallback
-6. **No kill reused** across clips (`montagesShareKill`)
+5. Prefer **3–4 kill** burst chains; **isolated kills → solo clip** (full coverage)
+6. **Every detected POV kill** is clipped — `partitionKillsIntoBurstPacks` (no 5-clip cap)
 
 ### Do NOT reintroduce
 
@@ -109,6 +110,15 @@ audioEnergyScan → hudKillFeed (Python ROI scan) → filterQualityHudKills
 - Auto `viral_score` from segment count only — use `montageViralScore` in `shooterHighlightSelect.js`
 - Skipping `isCoherentKillMontage` for HUD packs
 - `fallback_red_border` in `kill_feed_pipeline.py` — counted every red-border feed line (~3× false kills); use `killer_matches_pov` only
+- `pov_partial_victim` accept-all on red border — ~52 false kills (enemy names OCR'd as single victim); montage segments then show no frag
+- Narrow center crop for landscape 9:16 (`cropH=full, cropW=H*9/16`) — cuts off FPS weapon model; use blur-letterbox in `smartCrop.js`
+- Debug kill-export panel in main UI without `?debug=1` — use `isDebugUiEnabled()` only
+- `gameplayFraming` in `structuralSettingsKey` — triggers FFmpeg preview on toggle; framing is client CSS on raw clip
+- **Strict gamertag regex** `[A-Za-z0-9_\-]+` in `is_plausible_gamertag()` — rejects valid CS2 names with dots, brackets, etc.; use permissive pattern with boundary checks for bad words only
+- **`bottom_kills` ROI exclusion** — falsely ignores high-confidence multikill icons; include with high confidence threshold (≥0.7 + player_kill flag)
+- **Marking all kills as `red_highlight: True`** — breaks downstream quality filters; only set red_highlight when kill confirmed via visual red border detection
+- **Wide-gap montage bypass** — `isCoherentKillMontage({ wideGap: true })` allows incoherent clips spanning the VOD; always enforce local kill sequences
+- **Generic audio energy check** in `hasCombatAudioNear()` — checks delta buckets instead of specific gunshot peaks; verify against `audioScan.peaks` array
 
 ### Debug logs (production)
 
@@ -144,6 +154,54 @@ ssh -i C:\Users\rapha\.ssh\id_ed25519_hetzner root@62.238.39.31 \
 
 ---
 
+## Scheduled maintenance
+
+### Monthly jobs (`0 7 1 * *`)
+
+Run at **7:00 AM on the 1st of every month** (Europe/Berlin timezone).
+
+#### 1. Deep Cleanup (7:00 AM)
+
+More aggressive than the 10-minute temp cleanup:
+
+| Task | Retention | Description |
+|------|-----------|-------------|
+| Old job workspaces | 3 days | Removes temp dirs even if they have `meta.json` |
+| Preview caches | 7 days | `_previews/` subdirectories |
+| Debug kill exports | 14 days | Temporary shooter debug reels |
+| Log files | 30 days | `.log` files in `logs/` |
+| Expired projects | 60 days | Unsaved project entries (vs 30-day default) |
+
+**Files:** `server/src/services/monthlyCleanup.js`
+
+#### 2. Analytics Report (7:05 AM)
+
+Aggregiert Statistiken des Vormonats:
+
+| Metric | Description |
+|--------|-------------|
+| Job volume | Total, completed, failed counts |
+| Processing time | Avg/median/min/max duration |
+| Game categories | CS2, other games, unknown |
+| Highlights | Avg per video, montage job counts |
+| Source types | YouTube vs local uploads |
+| Error breakdown | Error codes and frequency |
+| Trend | Last 12 months comparison |
+
+**Output:** `server/data/analytics/YYYY-MM-report.txt` (also `latest.txt`)
+
+**Files:** `server/src/services/monthlyAnalytics.js`
+
+#### Manual trigger
+
+Server runs both jobs immediately on startup as requested. To run manually:
+```bash
+node -e "import('./src/services/monthlyCleanup.js').then(m => m.triggerMonthlyCleanupNow())"
+node -e "import('./src/services/monthlyAnalytics.js').then(m => m.triggerAnalyticsNow())"
+```
+
+---
+
 ## Debug kill export (temporary)
 
 Inspect HUD-detected kills per shooter analyze job. **Remove when done** — see `DEBUG_KILL_EXPORT_REMOVAL.md`.
@@ -156,6 +214,33 @@ Inspect HUD-detected kills per shooter analyze job. **Remove when done** — see
 | Reel (rejected) | `debug/kills-reel-rejected.mp4` |
 
 Enabled by default. Disable: `DEBUG_KILL_EXPORT=0` in server `.env`.
+
+**Client debug UI** (kill-export links in clip feed): only with `?debug=1` in the URL (`client/src/utils/debugUi.js`).
+
+---
+
+## Client UI (redesign)
+
+Shared components for the redesign; further phases build on these without changing pipeline behaviour.
+
+| Piece | Path |
+|-------|------|
+| Design tokens | `client/src/styles/tokens.css` |
+| Clip feed tile | `client/src/components/clip/ClipTile.jsx` |
+| Project card (rail + grid) | `client/src/components/project/ProjectTile.jsx` |
+| Editor preview frame | `client/src/components/editor/PreviewChrome.jsx` |
+| Wide / Crop / Fill bar | `client/src/components/editor/FramingBar.jsx` |
+| Framing + Editor toggle row | `client/src/components/editor/FramingEditorRow.jsx` |
+| Bottom editor timeline | `client/src/components/editor/EditorTimeline.jsx` |
+| Settings sheet + step list | `client/src/components/editor/SettingsSheet.jsx`, `EditorStepList.jsx` |
+| Inline tool rail (editor) | `client/src/components/editor/EditorToolRail.jsx` |
+| Montage info panel | `client/src/components/editor/MontageInfoPanel.jsx` |
+| View resolver | `client/src/utils/appViews.js` |
+| Home Bento | `client/src/views/HomeWorkspace.jsx` |
+| Clip feed | `client/src/views/ClipFeed.jsx` |
+| Bibliothek | `client/src/views/LibraryView.jsx` |
+
+Sidebar: **Start** (Import + Bento), **Bibliothek** (Suche, Sort, Filter). Clip-Feed: TikTok-Grid mit Sort (Score/Kills/Dauer). Editor: Preview + kompakte **Wide/Crop/Fill** + **Editor**-Toggle → volle **Timeline** (Trim/Split/Transport, Kill-Clips per Drag, Audio-Spur); Export-Dock unten.
 
 ---
 
@@ -170,7 +255,7 @@ scp -i C:\Users\rapha\.ssh\id_ed25519_hetzner -r client\dist root@62.238.39.31:/
 scp -i C:\Users\rapha\.ssh\id_ed25519_hetzner server\src\services\*.js root@62.238.39.31:/opt/videclip/server/src/services/
 
 # Python HUD script
-scp -i C:\Users\rapha\.ssh\id_ed25519_hetzner server\scripts\kill_feed_detect.py root@62.238.39.31:/opt/videclip/server/scripts/
+scp -i C:\Users\rapha\.ssh\id_ed25519_hetzner server\scripts\kill_feed_detect.py server\scripts\kill_feed_pipeline.py root@62.238.39.31:/opt/videclip/server/scripts/
 
 # Restart
 ssh -i C:\Users\rapha\.ssh\id_ed25519_hetzner root@62.238.39.31 "systemctl restart videclip"
@@ -191,7 +276,27 @@ npm start
 
 | Date | Change |
 |------|--------|
-| 2026-06-14 | `isCoherentKillMontage` auto-detects wide-gap jump cuts (fixes shooter-select rejecting HUD montages) |
+| 2026-06-19 | **Bugfix:** Shooter pipeline fixes — fixed `is_plausible_gamertag()` character whitelist (was rejecting valid CS2 names), improved `classify_registry_entry()` POV detection logic, fixed `red_highlight` marking for all kills, fixed `isCoherentKillMontage()` to always reject wide-gap montages, added `bottom_kills` ROI support, improved audio peak detection in `hasCombatAudioNear()` |
+| 2026-06-19 | **Maintenance:** Monthly cron jobs (`0 7 1 * *`) — deep cleanup + analytics report; both run immediately on startup |
+| 2026-06-12 | **UI:** Montage-Live-Preview — aktiver Kill-Index beim Segmentwechsel (überlappende Source-Zeiten); Playhead/Video bleiben auf Kill 2 statt zurück auf Kill 1 |
+| 2026-06-12 | **UI:** Timeline-Ruler und Kill-Spur gleiche Spaltenbreite (Label-Gutter) — 0:00 oben = Clip-Start unten |
+| 2026-06-12 | **UI:** Montage-Timeline — äußere Griffe (Kill 1 links, letzter Kill rechts) per Pixel-Delta statt geklemmter Timeline-Position; kein Festhängen am Rand |
+| 2026-06-12 | **UI:** Montage-Editor — Live-Preview aus Quell-VOD mit Jump-Cuts (Segment-Länge in Timeline = sofort abspielbar); Export nutzt `montage_segments` |
+| 2026-06-12 | **UI Phase 2d:** Timeline nur bei **Editor**-Klick; Werkzeug-Tabs entfernt; Trim-Toolbar über Timeline; Montage-Kills als separate ziehbare Clips (`montage_segments` → Export); Audio-Spur (+ Musik) |
+| 2026-06-12 | **UI Phase 2c:** `EditorTimeline` unten (Ruler, Playhead, Trim-Griffe, Split, Transport, Zoom; Montage-Kill-Spur); `FramingEditorRow` (kompakte Wide/Crop/Fill + Editor-Toggle); schmalere Export-Buttons |
+| 2026-06-12 | **UI Phase 2b:** Editor — `EditorToolRail` inline; FramingBar eigene Zone (kein Clip), Preview-Höhe begrenzt |
+| 2026-06-12 | **UI Phase 2:** Cinema Editor — single-column preview, Kill-Timeline, export dock, „Peak Score“ |
+| 2026-06-12 | **UI Phase 1:** `HomeWorkspace` (Bento), `ClipFeed` (Filter + Sort Kills/Dauer), `LibraryView` (Suche/Sort/Filter), `projectMetaLine` mit Kills/Dauer, Projekt-Hover-Play |
+| 2026-06-12 | **UI Phase 0:** `tokens.css`, `ClipTile`, `ProjectTile`, `PreviewChrome`, `FramingBar`; `appViews` + `data-app-view`; debug panel gated on `?debug=1`; sidebar **Bibliothek** |
+| 2026-06-12 | Gameplay framing (Wide/Crop/9:16): **client CSS on raw clip** — toggle does not trigger FFmpeg preview; export still bakes framing |
+| 2026-06-12 | Third gameplay framing **Fill** (`9:16`): classic center strip (full height, no blur); Wide/Crop unchanged |
+| 2026-06-12 | Crop framing: center **4:3** gameplay + blur letterbox (not full 16:9, not narrow 9:16 strip); preview + FFmpeg export |
+| 2026-06-15 | Fix Crop preview: explicit center-crop transform (316% width on 16:9); zoom fallback on baked 9:16 overview |
+| 2026-06-15 | Fix blur-letterbox FFmpeg graph: output pad `[bg]` must not be comma-separated (was `Filter not found`) |
+| 2026-06-14 | POV recall: red-border + foreign killer / victim-only OCR (`pov_foreign_killer_ocr`, `pov_partial_victim_foreign`) |
+| 2026-06-14 | Burst montages only: gap≤22s, span≤55s; anchor raw−1.8s + gunshot snap; no wide-gap chains; pick 4-kill clips first |
+| 2026-06-14 | Revert `pov_partial_victim`; `TRUSTED_POV_REASONS` montage filter; sliding chains before wide-gap; segment 8s (2.5+5.5) + 1.5s anchor lag; red-highlight ignores preset `kill_anchor_time` |
+| 2026-06-14 | POV partial-victim on red border; montage segments 8s (3.5+4.5) + 0.8s anchor lag for visible kill |
 | 2026-06-14 | POV: OCR cluster only (killer+victim scoring); multi-name match on red-border lines; no YouTube title hints; montage wide-gap coherence fix + sliding fallback |
 | 2026-06-14 | POV matching: `killer_matches_pov` (cluster aliases, peepfan stem, hint suffix); skip-reason logs; no `fallback_red_border` |
 | 2026-06-14 | POV filter: only killer≈POV counts; title/channel name overrides OCR fragment; fallback no longer accepts all feed kills |

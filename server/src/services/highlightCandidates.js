@@ -563,7 +563,7 @@ function injectHudMontageCandidates(candidates, videoDuration, scoringOpts = {})
   );
   for (const w of hudWindows.slice(0, 4)) {
     const segs = (w.montage_segments || []).filter((s) => s.segment_type !== 'payoff');
-    if (segs.length < 2) continue;
+    if (segs.length < 1) continue;
     const gaps = segs
       .slice(1)
       .map((s, i) => ((s.peak_time ?? s.start) - (segs[i].peak_time ?? segs[i].start)).toFixed(1));
@@ -600,7 +600,11 @@ function finalizeShooterCandidatePool(candidates, videoDuration, scoringOpts) {
   const ranked = montageOnly.length
     ? montageOnly
     : pool.filter((c) => c.flags?.includes('hud-kills'));
-  const top = sortCandidatesByMontageKillCount(ranked).slice(0, CLAUDE_POOL_SIZE);
+  const poolSize =
+    scoringOpts.profile?.id === 'shooter' && ranked.length > CLAUDE_POOL_SIZE
+      ? ranked.length
+      : CLAUDE_POOL_SIZE;
+  const top = sortCandidatesByMontageKillCount(ranked).slice(0, poolSize);
   const maxScore = top[0]?.local_score || 1;
 
   return top.map((c, i) => ({

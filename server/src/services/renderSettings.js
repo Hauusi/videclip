@@ -1,5 +1,6 @@
 const VALID_ASPECTS = new Set(['9:16', '1:1', '16:9']);
 const VALID_CAPTION_STYLES = new Set(['bold', 'minimal', 'fire']);
+const VALID_GAMEPLAY_FRAMING = new Set(['wide', 'crop', 'fill']);
 
 /**
  * Normalize client render prefs for analyze + export.
@@ -14,6 +15,9 @@ export function normalizeRenderSettings(raw = {}, mood = 'hype') {
 
   return {
     aspectRatio: VALID_ASPECTS.has(raw.aspectRatio) ? raw.aspectRatio : '9:16',
+    gameplayFraming: VALID_GAMEPLAY_FRAMING.has(raw.gameplayFraming)
+      ? raw.gameplayFraming
+      : 'wide',
     captionStyle: VALID_CAPTION_STYLES.has(styleRaw) ? styleRaw : 'fire',
     music: raw.music !== false,
     musicAuto: raw.musicAuto !== false,

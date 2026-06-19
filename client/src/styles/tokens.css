@@ -1,0 +1,70 @@
+/**
+ * PeakClip design tokens — v2 foundation (Phase 0).
+ * Surfaces, typography roles, semantic colors.
+ */
+
+.theme-root {
+  --surface-0: #07080d;
+  --surface-1: #10121a;
+  --surface-2: #181b26;
+  --surface-3: #1f2433;
+  --surface-glass: rgba(16, 18, 26, 0.72);
+
+  --text-primary: var(--t-text);
+  --text-secondary: var(--t-muted);
+  --text-tertiary: color-mix(in srgb, var(--t-muted) 75%, transparent);
+
+  --accent: var(--peak);
+  --accent-muted: color-mix(in srgb, var(--peak) 22%, transparent);
+  --accent-border: color-mix(in srgb, var(--peak) 38%, transparent);
+
+  --kill: #34d399;
+  --kill-muted: color-mix(in srgb, #34d399 18%, transparent);
+  --warn: #fbbf24;
+  --export-glow: 0 0 32px rgba(var(--peak-rgb), 0.28);
+
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.25rem;
+  --radius-2xl: 1.5rem;
+
+  --font-display: 'Outfit', 'Inter', system-ui, sans-serif;
+  --font-ui: 'Inter', system-ui, sans-serif;
+  --font-mono: ui-monospace, 'JetBrains Mono', monospace;
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --duration-fast: 150ms;
+  --duration-normal: 220ms;
+}
+
+.theme-root.light {
+  --surface-0: #f0f1f6;
+  --surface-1: #ffffff;
+  --surface-2: #f6f7fb;
+  --surface-3: #eceef5;
+  --surface-glass: rgba(255, 255, 255, 0.82);
+}
+
+.type-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+.surface-card {
+  background: var(--surface-1);
+  border: 1px solid var(--t-border);
+  border-radius: var(--radius-2xl);
+}
+
+.surface-elevated {
+  background: var(--surface-2);
+  border: 1px solid var(--t-border);
+  border-radius: var(--radius-xl);
+}
+
+.surface-glass {
+  background: var(--surface-glass);
+  backdrop-filter: blur(16px);
+  border: 1px solid color-mix(in srgb, var(--t-text) 8%, transparent);
+}

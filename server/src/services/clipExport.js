@@ -98,6 +98,21 @@ export function buildExportHighlight(hl, settings = {}, sourceDuration = 0) {
     highlight.cold_open = true;
   }
 
+  if (
+    hl.montage_segments?.length &&
+    Array.isArray(settings.montage_segments) &&
+    settings.montage_segments.length
+  ) {
+    highlight.montage_segments = settings.montage_segments;
+    highlight.output_duration = settings.montage_segments.reduce(
+      (s, seg) => s + (Number(seg.duration) || 0),
+      0,
+    );
+    highlight.montage_kill_count = settings.montage_segments.filter(
+      (s) => s.segment_type !== 'payoff',
+    ).length;
+  }
+
   return highlight;
 }
 
@@ -114,6 +129,18 @@ function hookCutChanged(hl, exportHl) {
     exportHl.cold_open !== Boolean(hl.cold_open) ||
     Math.abs((exportHl.hook_peak_time || 0) - (hl.hook_peak_time || 0)) > 0.35 ||
     Math.abs((exportHl.hook_offset_in_clip || 0) - (hl.hook_offset_in_clip || 0)) > 0.35
+  );
+}
+
+function montageSegmentsChanged(hl, exportHl) {
+  const base = hl.montage_segments || [];
+  const next = exportHl.montage_segments || [];
+  if (!base.length || !next.length) return false;
+  if (base.length !== next.length) return true;
+  return next.some(
+    (s, i) =>
+      Math.abs((s.start ?? 0) - (base[i].start ?? 0)) > 0.12 ||
+      Math.abs((s.duration ?? 0) - (base[i].duration ?? 0)) > 0.12,
   );
 }
 
@@ -201,6 +228,7 @@ export async function prepareExportRawClip(meta, hl, settings, jobWorkDir, { pre
     trimFromSettings ||
     trimChanged(hl, exportHl) ||
     hookCutChanged(hl, exportHl) ||
+    montageSegmentsChanged(hl, exportHl) ||
     !hl.rawClipPath;
   const rawClipsDir = path.join(jobWorkDir, 'raw-clips');
   await fs.mkdir(rawClipsDir, { recursive: true });

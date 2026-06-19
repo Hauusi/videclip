@@ -310,10 +310,11 @@ async function processClipWithCaptions(
     workDir: clipsDir,
     highlight: clipHighlight,
     transcriptSegments: clipTranscript,
-    options: {
+      options: {
       aspectRatio,
       smartCrop: true,
       wideOverlay,
+      gameplayFraming: rs.gameplayFraming || 'wide',
       captions: burnCaptions,
       music: Boolean(musicResolved),
       musicPath: musicResolved?.path || null,
@@ -492,7 +493,7 @@ export async function runAnalyzeJob(
       }))
       .filter((h) => {
         if (shooterPipeline) {
-          if (!isMontageHighlight(h) || (h.montage_segments?.length || 0) < 2) {
+          if (!isMontageHighlight(h) || (h.montage_segments?.length || 0) < 1) {
             console.warn(
               `[Pipeline] Dropped non-montage shooter highlight: ${h.id || h.title}`,
             );
@@ -817,6 +818,7 @@ export async function runAnalyzeJob(
         clip_duration_measured: highlight.clip_duration_measured,
         clipDuration,
         rawClipPath: path.relative(workDir, clipPath).replace(/\\/g, '/'),
+        rawClipUrl: `/api/files/${jobId}/${path.relative(workDir, clipPath).replace(/\\/g, '/')}`,
         thumbnailUrl: `/api/files/${jobId}/thumbs/${highlight.id}.jpg`,
         transcriptSegments,
         detectedLanguage: language,

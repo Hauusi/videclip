@@ -3,12 +3,15 @@ import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import cron from 'node-cron';
 import apiRoutes from './routes/api.js';
 import { config, isAnthropicKeyConfigured } from './config.js';
 import { ffmpegPath } from './lib/ffmpeg.js';
 import { cleanupOldJobs, ensureDir } from './services/tempFiles.js';
 import { friendlyError } from './utils/errors.js';
 import { refreshYoutubeCookies } from './services/cookieRefresh.js';
+import { runMonthlyDeepCleanup, triggerMonthlyCleanupNow } from './services/monthlyCleanup.js';
+import { runMonthlyAnalytics, triggerAnalyticsNow } from './services/monthlyAnalytics.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -57,6 +60,45 @@ setInterval(() => {
     console.warn('[cookies] Scheduled refresh:', err.message);
   });
 }, COOKIE_REFRESH_INTERVAL_MS);
+
+// Monthly maintenance cron job: 7:00 AM on 1st of every month (0 7 1 * *)
+const MONTHLY_CRON = '0 7 1 * *';
+if (cron.validate(MONTHLY_CRON)) {
+  // Schedule cleanup
+  cron.schedule(MONTHLY_CRON, async () => {
+    console.log('[Cron] Monthly maintenance triggered by schedule');
+    await runMonthlyDeepCleanup();
+  }, {
+    scheduled: true,
+    timezone: 'Europe/Berlin'
+  });
+
+  // Schedule analytics (runs 5 minutes later to avoid overlap)
+  cron.schedule('5 7 1 * *', async () => {
+    console.log('[Cron] Monthly analytics triggered by schedule');
+    await runMonthlyAnalytics();
+  }, {
+    scheduled: true,
+    timezone: 'Europe/Berlin'
+  });
+
+  console.log(`[Cron] Monthly maintenance scheduled: ${MONTHLY_CRON} (cleanup at 7:00, analytics at 7:05)`);
+} else {
+  console.error('[Cron] Invalid cron expression for monthly maintenance');
+}
+
+// Trigger both jobs immediately as requested
+console.log('[Cron] Starting monthly maintenance now (immediate execution)...');
+(async () => {
+  try {
+    await triggerMonthlyCleanupNow();
+    // Small delay between jobs
+    await new Promise(r => setTimeout(r, 1000));
+    await triggerAnalyticsNow();
+  } catch (err) {
+    console.error('[Cron] Immediate maintenance failed:', err.message);
+  }
+})();
 
 app.listen(config.port, () => {
   console.log('');
