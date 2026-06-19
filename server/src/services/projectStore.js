@@ -135,12 +135,28 @@ export async function getProtectedJobIds() {
   return ids;
 }
 
-export async function pruneExpiredProjects() {
+export async function pruneExpiredProjects(maxAgeDays = null) {
   const projects = await readAll();
   const now = Date.now();
-  const next = projects.filter((p) => p.saved || !p.expiresAt || p.expiresAt > now);
+
+  let cutoff = null;
+  if (maxAgeDays) {
+    cutoff = now - (maxAgeDays * 24 * 60 * 60 * 1000);
+  }
+
+  const next = projects.filter((p) => {
+    if (p.saved) return true;
+    if (!p.expiresAt) return true;
+    // Normal expiry check
+    if (p.expiresAt > now) return true;
+    // For monthly cleanup: also remove projects older than maxAgeDays even if they have future expiry
+    if (cutoff && p.createdAt && p.createdAt < cutoff) return false;
+    return true;
+  });
+
   if (next.length !== projects.length) {
     await writeAll(next);
+    console.log(`[ProjectStore] Pruned ${projects.length - next.length} old projects`);
   }
   return projects.length - next.length;
 }

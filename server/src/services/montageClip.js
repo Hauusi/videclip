@@ -959,7 +959,7 @@ export function buildKillMontagePacks(events, videoDuration, options = {}) {
   const packs = partitionKillsIntoBurstPacks(engagements);
   const selected = packs
     .map((pack) => buildHudKillClipFromPack(pack.kills, videoDuration, options))
-    .filter((clip) => clip && isCoherentKillMontage(clip, { wideGap: false }));
+    .filter((clip) => clip && isCoherentKillMontage(clip));
 
   const totalSegs = selected.reduce((n, c) => n + (c.montage_kill_count || 0), 0);
   const killHist = selected.map((c) => c.montage_kill_count).join('+');
@@ -998,24 +998,47 @@ export function montageUsesWideSourceGaps(candidate) {
   return false;
 }
 
-/** Reject montages that jump across the VOD (e.g. kill at 19s then 400s). */
-export function isCoherentKillMontage(candidate, { wideGap } = {}) {
+/** Reject montages that jump across the VOD (e.g. kill at 19s then 400s).
+ * 
+ * IMPORTANT: Never allow wide-gap montages that stitch kills from distant parts
+ * of the VOD together. This creates incoherent clips with large dead time.
+ * Each montage must represent a single local combat sequence.
+ */
+export function isCoherentKillMontage(candidate) {
   const segs = (candidate?.montage_segments || []).filter((s) => s.segment_type !== 'payoff');
   if (segs.length < 1) return false;
   if (segs.length === 1) return true;
-  const useWideGap = wideGap ?? montageUsesWideSourceGaps(candidate);
-  if (!useWideGap) {
-    for (let i = 1; i < segs.length; i++) {
-      const prev = segs[i - 1].peak_time ?? segs[i - 1].start;
-      const curr = segs[i].peak_time ?? segs[i].start;
-      if (curr - prev > MAX_KILL_GAP_IN_MONTAGE_SEC) return false;
+  
+  // STRICT: Always check for wide gaps - never allow wide-gap stitching
+  // This enforces the rule: kills in a montage must be from a single local sequence
+  for (let i = 1; i < segs.length; i++) {
+    const prev = segs[i - 1].peak_time ?? segs[i - 1].start;
+    const curr = segs[i].peak_time ?? segs[i].start;
+    const gap = curr - prev;
+    // Log wide gaps for debugging but always reject them
+    if (gap > MAX_KILL_GAP_IN_MONTAGE_SEC) {
+      console.log(`[montage-coherence] REJECTED: gap ${gap.toFixed(1)}s > ${MAX_KILL_GAP_IN_MONTAGE_SEC}s (kill ${i} to ${i+1})`);
+      return false;
     }
   }
+  
   const span =
     (segs[segs.length - 1].peak_time ?? segs[segs.length - 1].start) -
     (segs[0].peak_time ?? segs[0].start);
-  if (!useWideGap && span > MONTAGE_BURST_MAX_SPAN_SEC) return false;
-  return span <= HUD_CLUSTER_MAX_SPAN_SEC;
+  
+  // Reject if total span too long for a burst montage
+  if (span > MONTAGE_BURST_MAX_SPAN_SEC) {
+    console.log(`[montage-coherence] REJECTED: span ${span.toFixed(1)}s > ${MONTAGE_BURST_MAX_SPAN_SEC}s (burst limit)`);
+    return false;
+  }
+  
+  // Reject if span exceeds absolute maximum
+  if (span > HUD_CLUSTER_MAX_SPAN_SEC) {
+    console.log(`[montage-coherence] REJECTED: span ${span.toFixed(1)}s > ${HUD_CLUSTER_MAX_SPAN_SEC}s (absolute limit)`);
+    return false;
+  }
+  
+  return true;
 }
 
 /**
@@ -1030,10 +1053,18 @@ export function buildHudMontageCandidate(cluster, videoDuration, options = {}) {
   }
   if (kills.length < 2) return null;
 
-  const timing =
-    kills.some((k) => k.player_kill || k.red_highlight || k.validated_by === 'red-highlight')
-      ? RED_HIGHLIGHT_KILL_TIMING
-      : HUD_KILL_TIMING;
+  // Choose timing profile based on the majority of kills
+  // Red-highlight timing is for kills confirmed via visual red border
+  // HUD timing is for kills detected via OCR text matching
+  const redHighlightKills = kills.filter((k) => 
+    k.red_highlight || k.validated_by === 'red-highlight' || k.method?.includes('red-highlight')
+  ).length;
+  
+  // Use red-highlight timing only if majority (>50%) are red-highlight kills
+  // This prevents mixing timing profiles in a single montage
+  const useRedHighlightTiming = redHighlightKills >= kills.length / 2;
+  
+  const timing = useRedHighlightTiming ? RED_HIGHLIGHT_KILL_TIMING : HUD_KILL_TIMING;
   const built = buildHudKillMontageSegments(kills, videoDuration, timing, audioScan);
   if (!built?.montage_segments?.length || built.montage_segments.length < 2) return null;
 

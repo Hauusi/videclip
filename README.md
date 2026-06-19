@@ -4,7 +4,7 @@ YouTube/VOD → AI highlights → vertical clips (Shorts, TikTok, Reels).
 
 > **Living documentation.** This file is the single source of truth for architecture, pipeline behaviour, and production deploy. **Agents must update it in the same session** when adding, removing, or changing features (see `AGENTS.md` and `.cursor/rules/readme-sync.mdc`).
 
-**Last updated:** 2026-06-12 (Montage kill-2 playback — active segment tracking)
+**Last updated:** 2026-06-19 (Shooter pipeline bugfixes — gamertag validation, POV detection, montage coherence)
 
 ---
 
@@ -114,6 +114,11 @@ audioEnergyScan → hudKillFeed (Python ROI scan) → filterQualityHudKills
 - Narrow center crop for landscape 9:16 (`cropH=full, cropW=H*9/16`) — cuts off FPS weapon model; use blur-letterbox in `smartCrop.js`
 - Debug kill-export panel in main UI without `?debug=1` — use `isDebugUiEnabled()` only
 - `gameplayFraming` in `structuralSettingsKey` — triggers FFmpeg preview on toggle; framing is client CSS on raw clip
+- **Strict gamertag regex** `[A-Za-z0-9_\-]+` in `is_plausible_gamertag()` — rejects valid CS2 names with dots, brackets, etc.; use permissive pattern with boundary checks for bad words only
+- **`bottom_kills` ROI exclusion** — falsely ignores high-confidence multikill icons; include with high confidence threshold (≥0.7 + player_kill flag)
+- **Marking all kills as `red_highlight: True`** — breaks downstream quality filters; only set red_highlight when kill confirmed via visual red border detection
+- **Wide-gap montage bypass** — `isCoherentKillMontage({ wideGap: true })` allows incoherent clips spanning the VOD; always enforce local kill sequences
+- **Generic audio energy check** in `hasCombatAudioNear()` — checks delta buckets instead of specific gunshot peaks; verify against `audioScan.peaks` array
 
 ### Debug logs (production)
 
@@ -146,6 +151,54 @@ ssh -i C:\Users\rapha\.ssh\id_ed25519_hetzner root@62.238.39.31 \
 | POST | `/api/preview` | Lightweight preview |
 | POST | `/api/download-all` | ZIP export |
 | POST | `/api/upload-music` | Custom music track |
+
+---
+
+## Scheduled maintenance
+
+### Monthly jobs (`0 7 1 * *`)
+
+Run at **7:00 AM on the 1st of every month** (Europe/Berlin timezone).
+
+#### 1. Deep Cleanup (7:00 AM)
+
+More aggressive than the 10-minute temp cleanup:
+
+| Task | Retention | Description |
+|------|-----------|-------------|
+| Old job workspaces | 3 days | Removes temp dirs even if they have `meta.json` |
+| Preview caches | 7 days | `_previews/` subdirectories |
+| Debug kill exports | 14 days | Temporary shooter debug reels |
+| Log files | 30 days | `.log` files in `logs/` |
+| Expired projects | 60 days | Unsaved project entries (vs 30-day default) |
+
+**Files:** `server/src/services/monthlyCleanup.js`
+
+#### 2. Analytics Report (7:05 AM)
+
+Aggregiert Statistiken des Vormonats:
+
+| Metric | Description |
+|--------|-------------|
+| Job volume | Total, completed, failed counts |
+| Processing time | Avg/median/min/max duration |
+| Game categories | CS2, other games, unknown |
+| Highlights | Avg per video, montage job counts |
+| Source types | YouTube vs local uploads |
+| Error breakdown | Error codes and frequency |
+| Trend | Last 12 months comparison |
+
+**Output:** `server/data/analytics/YYYY-MM-report.txt` (also `latest.txt`)
+
+**Files:** `server/src/services/monthlyAnalytics.js`
+
+#### Manual trigger
+
+Server runs both jobs immediately on startup as requested. To run manually:
+```bash
+node -e "import('./src/services/monthlyCleanup.js').then(m => m.triggerMonthlyCleanupNow())"
+node -e "import('./src/services/monthlyAnalytics.js').then(m => m.triggerAnalyticsNow())"
+```
 
 ---
 
@@ -223,6 +276,8 @@ npm start
 
 | Date | Change |
 |------|--------|
+| 2026-06-19 | **Bugfix:** Shooter pipeline fixes — fixed `is_plausible_gamertag()` character whitelist (was rejecting valid CS2 names), improved `classify_registry_entry()` POV detection logic, fixed `red_highlight` marking for all kills, fixed `isCoherentKillMontage()` to always reject wide-gap montages, added `bottom_kills` ROI support, improved audio peak detection in `hasCombatAudioNear()` |
+| 2026-06-19 | **Maintenance:** Monthly cron jobs (`0 7 1 * *`) — deep cleanup + analytics report; both run immediately on startup |
 | 2026-06-12 | **UI:** Montage-Live-Preview — aktiver Kill-Index beim Segmentwechsel (überlappende Source-Zeiten); Playhead/Video bleiben auf Kill 2 statt zurück auf Kill 1 |
 | 2026-06-12 | **UI:** Timeline-Ruler und Kill-Spur gleiche Spaltenbreite (Label-Gutter) — 0:00 oben = Clip-Start unten |
 | 2026-06-12 | **UI:** Montage-Timeline — äußere Griffe (Kill 1 links, letzter Kill rechts) per Pixel-Delta statt geklemmter Timeline-Position; kein Festhängen am Rand |

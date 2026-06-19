@@ -24,6 +24,8 @@ CS2 VODs use HUD kill-feed detection (`kill_feed_detect.py`), quality filtering 
 | Python HUD | `server/scripts/kill_feed_detect.py` |
 | Client UI tiles / editor chrome | `client/src/components/clip/`, `project/`, `editor/` |
 | Client views (Phase 1+) | `client/src/views/` |
+| Monthly cleanup | `server/src/services/monthlyCleanup.js` (cron: `0 7 1 * *` in `index.js`) |
+| Monthly analytics | `server/src/services/monthlyAnalytics.js` (runs 7:05 AM) |
 | Production | `62.238.39.31:/opt/videclip`, `systemctl restart videclip` |
 
 ## README update triggers
