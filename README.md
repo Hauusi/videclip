@@ -4,7 +4,7 @@ YouTube/VOD → AI highlights → vertical clips (Shorts, TikTok, Reels).
 
 > **Living documentation.** This file is the single source of truth for architecture, pipeline behaviour, and production deploy. **Agents must update it in the same session** when adding, removing, or changing features (see `AGENTS.md` and `.cursor/rules/readme-sync.mdc`).
 
-**Last updated:** 2026-06-24 (Shooter montage builder — dense POV kill-feed fights stay continuous; preview recuts deduped)
+**Last updated:** 2026-07-02 (Kill-detection eval harness: ground_truth.json + scoring.py)
 
 ---
 
@@ -78,6 +78,7 @@ audioEnergyScan → hudKillFeed (Python ROI scan) → filterQualityHudKills
 | File | Role |
 |------|------|
 | `server/scripts/kill_feed_detect.py` | Frame-diff + OCR in kill-feed ROIs; `adjust_kill_time()` |
+| `ground_truth.json` + `scoring.py` | Eval harness: compare pipeline kills vs labeled timestamps (±2s) |
 | `server/src/services/hudKillFeed.js` | Scan windows, spawn Python, merge events |
 | `server/src/services/shooterClusters.js` | `isConfirmedHudKill`, `isQualityHudKill`, `filterQualityHudKills` |
 | `server/src/services/montageClip.js` | Chains, segments, timing, `buildKillMontagePacks` |
@@ -279,10 +280,26 @@ npm start
 
 ---
 
+## Kill-detection eval (local)
+
+Labeled kills in `ground_truth.json`; `scoring.py` runs `kill_feed_detect.py` on `testvid.mp4` and appends metrics to `results.json`.
+
+**Requires:** Python 3.11+, `pip install -r server/requirements-hud.txt`, **Tesseract OCR** on PATH (or `TESSERACT_CMD`), `npm install` in `server/` for `ffmpeg-static`.
+
+```bash
+py -3.11 scoring.py
+py -3.11 test_scoring.py -v   # unit tests for matcher only
+```
+
+Tunables live in `KillFeedConfig` (`kill_feed_pipeline.py`); montage cut buffers in `montageClip.js` (`HUD_KILL_TIMING`, `RED_HIGHLIGHT_KILL_TIMING`).
+
+---
+
 ## Changelog (architecture)
 
 | Date | Change |
 |------|--------|
+| 2026-07-02 | **Kill-detection eval:** `ground_truth.json` + `scoring.py` (TP/FP/FN, precision/recall/F1, run history in `results.json`); finer backward anchor step (0.33s) and slightly lower red-border thresholds in `KillFeedConfig`; Tesseract auto-discovery via `TESSERACT_CMD` |
 | 2026-06-24 | **Shooter montage builder:** Dense local POV kill-feed fights now stay continuous (≤22s gaps, ≤32s span) instead of being reduced to two jump-cuts; Python `two-pass-ocr` kill events bypass `collapseHudEngagements`; HUD de-dupe is timeline-grouped instead of score-first; preview rendering dedupes in-flight identical builds and saves cache state with the post-recut raw fingerprint to stop repeated `/api/preview` re-cuts |
 | 2026-06-24 | **Montage timing fix:** HUD/red kill segments widened to ~1.0s pre + ~7s post (`maxSegDur` 8.5) so a kill (and a push into the next frag) isn't clipped at segment end; removed `snapPeakToGunshot` call in `buildKillSegmentAtAnchor` (was shifting the cut before the visible kill). Diagnosed from job `1025114a` hl-0 where seg2 ended at 125.8s right as the B-site frag started |
 | 2026-06-24 | **POV identity:** `hudKillFeed.js` sends `channel`+`title`; `derive_pov_hint()` extracts a gamertag (channel handle, or `<name> POV` title pattern); `resolve_pov_rep()` keeps the OCR cluster spelling when override agrees (e.g. `s1mple`→OCR `simple`) and only swaps in the override when the cluster picked the wrong player. Protects wrong-cluster VODs without degrading good ones |

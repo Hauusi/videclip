@@ -22,6 +22,35 @@ _NAME_RE = re.compile(
     r"(?:[A-Za-z0-9_\u0400-\u04FF][A-Za-z0-9_\-\u0400-\u04FF]{2,})"
 )
 _RUS_OCR_WARNED = False
+_TESSERACT_CONFIGURED = False
+
+
+def configure_tesseract() -> bool:
+    """Resolve Tesseract binary from env or common install paths."""
+    global _TESSERACT_CONFIGURED
+    if _TESSERACT_CONFIGURED:
+        return True
+
+    import pytesseract
+
+    cmd = os.environ.get("TESSERACT_CMD", "").strip()
+    if cmd and os.path.isfile(cmd):
+        pytesseract.pytesseract.tesseract_cmd = cmd
+        _TESSERACT_CONFIGURED = True
+        return True
+
+    for candidate in (
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        "/usr/bin/tesseract",
+        "/usr/local/bin/tesseract",
+    ):
+        if os.path.isfile(candidate):
+            pytesseract.pytesseract.tesseract_cmd = candidate
+            _TESSERACT_CONFIGURED = True
+            return True
+
+    return False
 
 
 @dataclass
@@ -37,7 +66,8 @@ class KillFeedConfig:
     # Spawn/warmup filter — owned here only (Node killDetect.js must not duplicate).
     spawn_cutoff_sec: float = 32.0
 
-    fine_step_sec: float = 0.5
+    # Finer backward steps improve kill-anchor timing for montage cuts (was 0.5s).
+    fine_step_sec: float = 0.33
     fine_max_back_sec: float = 12.0
     fine_miss_budget: int = 2
 
@@ -50,8 +80,9 @@ class KillFeedConfig:
 
     min_entry_width: int = 40
     min_entry_height: int = 8
-    min_border_red_ratio: float = 0.035
-    min_border_score: float = 0.028
+    # Slightly lower for compressed YouTube/H.264 footage (was 0.035 / 0.028).
+    min_border_red_ratio: float = 0.030
+    min_border_score: float = 0.024
 
     fuzzy_match_threshold: float = 0.85
     pov_cluster_threshold: float = 0.62
@@ -528,8 +559,9 @@ def _ocr_score_text(text: str, data: dict[str, Any]) -> float:
 
 def _ocr_threshold_passes(gray: np.ndarray, tess_cfg: str, lang: str | None = None) -> tuple[str, float]:
     import pytesseract
-    from pytesseract import Output
+    from pytesseract import Output, TesseractNotFoundError
 
+    configure_tesseract()
     best_text, best_score = "", -1.0
     config = tess_cfg if lang is None else tess_cfg
     for invert in (False, True):
@@ -544,6 +576,8 @@ def _ocr_threshold_passes(gray: np.ndarray, tess_cfg: str, lang: str | None = No
             else:
                 data = pytesseract.image_to_data(th, config=config, output_type=Output.DICT)
                 text = pytesseract.image_to_string(th, config=config)
+        except TesseractNotFoundError:
+            raise
         except Exception:
             text = ""
             data = {"conf": []}
@@ -574,7 +608,7 @@ def ocr_kill_bar(bar_bgr: np.ndarray, cfg: KillFeedConfig) -> tuple[str, float]:
     # Includes: letters, numbers, underscore, hyphen, dot, space, and common brackets
     tess_whitelist = (
         f"--psm {cfg.ocr_psm} "
-        "-c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_\-. []|()@<> "
+        r"-c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_\-. []|()@<> "
     )
     best_text, best_score = _ocr_threshold_passes(gray, tess_whitelist)
 
@@ -1206,6 +1240,12 @@ def run_pipeline(
     cfg = cfg or KillFeedConfig()
     if os.environ.get("KILL_FEED_DEBUG", "").strip() in ("1", "true", "yes"):
         cfg.debug_ocr = True
+
+    if not configure_tesseract():
+        _kf_log(
+            "WARNING: Tesseract OCR not found — OCR pass will return empty "
+            "(set TESSERACT_CMD or install tesseract-ocr)"
+        )
 
     stats = PipelineStats()
     debug = OcrDebugLogger(cfg.debug_ocr, cfg.debug_dir)

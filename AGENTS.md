@@ -22,6 +22,7 @@ CS2 VODs use HUD kill-feed detection (`kill_feed_detect.py`), quality filtering 
 | 9:16 gameplay frame | `server/src/services/smartCrop.js` |
 | HUD quality | `server/src/services/shooterClusters.js` |
 | Python HUD | `server/scripts/kill_feed_detect.py` |
+| Kill eval | `ground_truth.json`, `scoring.py`, `test_scoring.py` |
 | Client UI tiles / editor chrome | `client/src/components/clip/`, `project/`, `editor/` |
 | Client views (Phase 1+) | `client/src/views/` |
 | Monthly cleanup | `server/src/services/monthlyCleanup.js` (cron: `0 7 1 * *` in `index.js`) |
