@@ -16,6 +16,7 @@ venv/
 *.tmp
 raw-clips/
 thumbs/
+results.json
 
 # OS files
 .DS_Store
