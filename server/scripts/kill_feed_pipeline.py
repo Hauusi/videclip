@@ -247,30 +247,10 @@ def normalize_name(name: str) -> str:
 
 
 def fuzzy_ratio(a: str, b: str) -> float:
-    """Calculate fuzzy match ratio between two strings.
-    
-    Uses SequenceMatcher with special handling for short names:
-    - Names under 4 chars need exact match or very high similarity
-    - Names 4-5 chars use slightly relaxed threshold
-    - Names 6+ chars use standard fuzzy matching
-    """
     if not a or not b:
         return 0.0
     if a == b:
         return 1.0
-    
-    # For very short names, be more strict to avoid false positives
-    # e.g., "Ace" vs "Abe" should not match (both 3 chars)
-    min_len = min(len(a), len(b))
-    if min_len <= 3:
-        # For 2-3 char names, require exact match or one char difference
-        # Use Levenshtein-like strictness
-        sm = SequenceMatcher(None, a, b)
-        ratio = sm.ratio()
-        # Boost threshold for short names
-        if ratio < 0.85:  # Strict for very short names
-            return ratio * 0.5  # Penalize low similarity
-    
     return SequenceMatcher(None, a, b).ratio()
 
 
@@ -318,70 +298,56 @@ def name_matches_pov(
     pov_cluster: dict[str, Any] | None,
     cfg: KillFeedConfig,
 ) -> bool:
-    """Name ≈ POV player from OCR cluster (fuzzy, aliases, shared stem).
-    
-    Handles various matching scenarios:
-    - Exact fuzzy match above threshold
-    - Common name suffixes/stems (handles OCR reading partial names)
-    - Prefix matching (e.g., "PlayerName" vs "Player")
-    - Cluster member matching (for name variants)
-    """
+    """Name ≈ POV player from OCR cluster (fuzzy, aliases, shared stem)."""
     k = normalize_name(name)
-    pn = normalize_name(pov_rep)
-    
-    if len(k) < 2 or not pov_rep or len(pn) < 2:
+    if len(k) < 3 or not pov_rep:
         return False
-    
     threshold = cfg.pov_match_threshold
     
     # Direct fuzzy match
     if name_matches_cluster(name, pov_rep, threshold):
         return True
     
-    # For short names (2-4 chars), require higher similarity
-    # to avoid false positives like "Ace" matching "Abe"
-    if len(k) <= 4 or len(pn) <= 4:
-        # Require very high similarity for short names
-        if fuzzy_ratio(k, pn) >= 0.9:
-            return True
-        # Or exact match after normalization
-        if k == pn:
-            return True
-        return False
+    # Lower threshold for very similar names (typos, OCR errors)
+    pn = normalize_name(pov_rep)
+    ratio = fuzzy_ratio(k, pn)
+    if ratio >= 0.55:  # Lower threshold for OCR typo tolerance
+        return True
     
-    # Stem matching for longer names (handles OCR reading partial names)
-    # Check if the name ends with the same distinctive suffix
-    for stem_len in (min(8, len(pn)), min(7, len(pn)), min(6, len(pn)), min(5, len(pn))):
-        if len(pn) >= stem_len and len(k) >= stem_len - 2:
+    # Substring matching (e.g., "simple" in "simpsa", or vice versa)
+    if len(k) >= 4 and len(pn) >= 4:
+        # Check if one is substring of the other (for OCR partial reads)
+        if k in pn or pn in k:
+            return True
+        # Check common prefix (first 4+ chars match)
+        min_len = min(len(k), len(pn))
+        prefix_len = max(4, min_len - 2)
+        if k[:prefix_len] == pn[:prefix_len]:
+            return True
+    
+    # Stem matching (last N chars for suffix similarity)
+    for stem_len in (7, 6, 5, 4):
+        if len(pn) >= stem_len and len(k) >= stem_len - 1:
             stem = pn[-stem_len:]
             if stem in k or k in pn:
                 return True
     
-    # Prefix matching (e.g., "LongPlayerName" vs "LongPlayer" or "LongP")
-    # Check if one is a prefix of the other (handles truncated names)
-    min_match_len = min(len(k), len(pn))
-    if min_match_len >= 4:
-        prefix_len = min(min_match_len - 1, max(4, min_match_len // 2 + 2))
-        if k[:prefix_len] == pn[:prefix_len]:
+    # Suffix matching (e.g., "simple" ends with same as "simpsa")
+    if len(k) >= 3 and len(pn) >= 3:
+        if k[-3:] == pn[-3:] or k[-4:] == pn[-4:]:
             return True
     
-    # Check if shorter name is suffix of longer (e.g., "PlayerName" vs "Name")
-    if len(k) >= 3 and pn.endswith(k):
-        return True
-    if len(pn) >= 3 and k.endswith(pn):
-        return True
-    
-    # Cluster member matching (for name variants/typos)
+    # Cluster member matching with lower threshold
     if pov_cluster:
         for member in pov_cluster.get("members", []):
-            nm = normalize_name(member)
-            if len(nm) < 2:
+            member_norm = normalize_name(member)
+            if len(member_norm) < 3:
                 continue
-            # Use adjusted threshold based on name length
-            adj_threshold = max(0.65, threshold - 0.05)
-            if len(nm) <= 4 or len(k) <= 4:
-                adj_threshold = 0.85  # Stricter for short names
-            if fuzzy_ratio(k, nm) >= adj_threshold:
+            # Higher threshold for cluster members
+            if fuzzy_ratio(k, member_norm) >= max(0.55, threshold - 0.1):
+                return True
+            # Substring match against cluster members
+            if k in member_norm or member_norm in k:
                 return True
     
     return False
@@ -653,19 +619,11 @@ def parse_kill_fingerprint(ocr_text: str) -> dict[str, Any]:
 
 
 def is_valid_kill_fingerprint(fp: dict[str, Any]) -> bool:
-    """Validate that a fingerprint represents a real kill entry.
-    
-    For partial fingerprints (single name), require at least 2 chars.
-    For full fingerprints, require both killer and victim with at least 2 chars each,
-    and they must be different people.
-    """
     if is_partial_fingerprint(fp):
-        return len(normalize_name(fp.get("killer", ""))) >= 2
+        return len(normalize_name(fp.get("killer", ""))) >= 3
     k = normalize_name(fp.get("killer", ""))
     v = normalize_name(fp.get("victim", ""))
-    # Require at least 2 chars for each name (CS2 allows 2-char names)
-    # and ensure they're not the same person (no self-kills in normal gameplay)
-    return len(k) >= 2 and len(v) >= 2 and k != v
+    return len(k) >= 3 and len(v) >= 3 and k != v
 
 
 def fingerprint_key(fp: dict[str, Any]) -> str:
@@ -681,34 +639,19 @@ def fingerprint_key(fp: dict[str, Any]) -> str:
 
 
 def partial_matches_full(partial: dict[str, Any], full: dict[str, Any], threshold: float) -> bool:
-    """Check if a partial fingerprint matches a full fingerprint.
-    
-    Uses adjusted threshold for short names to avoid false positives.
-    """
     name = normalize_name(partial.get("killer", ""))
-    if len(name) < 2:
+    if len(name) < 3:
         return False
-    
-    # Adjust threshold for short names
-    adj_threshold = threshold
-    if len(name) <= 4:
-        adj_threshold = max(0.85, threshold)
-    
     killer = normalize_name(full.get("killer", ""))
     victim = normalize_name(full.get("victim", ""))
-    if killer and fuzzy_ratio(name, killer) >= adj_threshold:
+    if killer and fuzzy_ratio(name, killer) >= threshold:
         return True
-    if victim and fuzzy_ratio(name, victim) >= adj_threshold:
+    if victim and fuzzy_ratio(name, victim) >= threshold:
         return True
     return False
 
 
 def fingerprint_match(a: dict[str, Any], b: dict[str, Any], threshold: float) -> bool:
-    """Check if two fingerprints represent the same kill event.
-    
-    Handles partial-to-full matching and partial-to-partial matching
-    with appropriate thresholds for name lengths.
-    """
     if is_partial_fingerprint(a) and is_full_fingerprint(b):
         return partial_matches_full(a, b, threshold)
     if is_partial_fingerprint(b) and is_full_fingerprint(a):
@@ -716,13 +659,7 @@ def fingerprint_match(a: dict[str, Any], b: dict[str, Any], threshold: float) ->
     if is_partial_fingerprint(a) and is_partial_fingerprint(b):
         na = normalize_name(a.get("killer", ""))
         nb = normalize_name(b.get("killer", ""))
-        if len(na) < 2 or len(nb) < 2:
-            return False
-        # Use stricter threshold for short names
-        adj_threshold = threshold
-        if len(na) <= 4 or len(nb) <= 4:
-            adj_threshold = max(0.85, threshold)
-        return fuzzy_ratio(na, nb) >= adj_threshold
+        return len(na) >= 3 and len(nb) >= 3 and fuzzy_ratio(na, nb) >= threshold
 
     ka = fingerprint_key(a)
     kb = fingerprint_key(b)
@@ -1101,12 +1038,63 @@ def resolve_pov_rep(
     pov_cluster: dict[str, Any] | None,
     pov_player_override: str | None = None,
 ) -> str:
-    """Canonical POV name from OCR cluster or explicit override only."""
-    if pov_player_override and is_plausible_gamertag(pov_player_override):
-        return normalize_name(pov_player_override)
-    if pov_cluster:
-        return normalize_name(pov_cluster["representative"])
-    return ""
+    """Canonical POV name from OCR cluster and/or explicit override.
+
+    Key insight: OCR is deterministic about some glitches (e.g. CS2 renders
+    ``s1mple`` and Tesseract reliably reads ``simple`` — the digit becomes ``i``).
+    When the override and the cluster refer to the *same* player, the OCR
+    spelling matches the rest of the feed reads better, so we keep the cluster
+    rep. The override only wins when it clearly *disagrees* with the cluster
+    (cluster picked the wrong player) or when there is no cluster at all.
+    """
+    cluster_rep = normalize_name(pov_cluster["representative"]) if pov_cluster else ""
+    override = (
+        normalize_name(pov_player_override)
+        if pov_player_override and is_plausible_gamertag(pov_player_override)
+        else ""
+    )
+    if override and cluster_rep:
+        same_player = (
+            fuzzy_ratio(override, cluster_rep) >= 0.55
+            or override in cluster_rep
+            or cluster_rep in override
+        )
+        return cluster_rep if same_player else override
+    return override or cluster_rep
+
+
+_POV_TITLE_STOP = frozenset(
+    {
+        "vs", "pov", "cs2", "csgo", "faceit", "premier", "rank", "rated",
+        "highlights", "highlight", "stream", "twitch", "live", "full",
+        "match", "demo", "clip", "clips", "gameplay", "the", "and",
+    }
+)
+
+
+def derive_pov_hint(channel: str | None, title: str | None) -> str | None:
+    """Best-effort POV gamertag from channel/title metadata.
+
+    Channel handle is the reliable signal (POV uploads are usually on the
+    player's own channel). For titles we only trust a ``<name> POV`` pattern,
+    otherwise the first plausible non-stopword token. Returns ``None`` when
+    nothing confident is found so the OCR cluster stays in charge.
+    """
+    chan = (channel or "").strip().lstrip("@")
+    if is_plausible_gamertag(chan):
+        return chan
+
+    text = title or ""
+    m = re.search(r"([A-Za-z0-9_\-]{3,})\s+pov\b", text, re.IGNORECASE)
+    if m and is_plausible_gamertag(m.group(1)):
+        return m.group(1)
+
+    for tok in _NAME_RE.findall(text):
+        if tok.lower() in _POV_TITLE_STOP:
+            continue
+        if is_plausible_gamertag(tok):
+            return tok
+    return None
 
 
 def classify_registry_entry(
@@ -1116,17 +1104,7 @@ def classify_registry_entry(
     all_clusters: list[dict[str, Any]],
     cfg: KillFeedConfig,
 ) -> tuple[str, str]:
-    """Classify a kill feed entry as POV kill, death, or foreign/ignore.
-    
-    Logic flow:
-    1. Death detection: If victim matches POV, it's a death (not a kill)
-    2. Kill detection: If killer matches POV, it's a POV kill
-    3. Assist fallback: If assist matches POV, it's likely a kill (POV assisted)
-    4. Partial fingerprints: Check any name in the entry for POV match
-    5. Foreign killer check: If killer clearly belongs to another cluster, skip
-    6. Team/self kill handling: Detect when POV is killed by teammate or self
-    7. Default: Skip if no POV match found
-    """
+    """Red-border line + POV name in OCR → kill. Foreign killer cluster → skip."""
     if not pov_rep:
         return "skip", "no_pov"
 
@@ -1134,83 +1112,46 @@ def classify_registry_entry(
     killer = entry.get("killer", "") or fp.get("killer", "")
     victim = entry.get("victim", "") or fp.get("victim", "")
     assist = entry.get("assist", "") or fp.get("assist", "")
-    
-    # Normalize for comparison
-    nk = normalize_name(killer)
-    nv = normalize_name(victim)
 
-    # 1. DEATH DETECTION: If POV is the victim, it's a death (not a kill)
-    # Use strict matching for death detection to avoid false positives
     if victim and name_matches_pov(victim, pov_rep, pov_cluster, cfg):
-        # Additional check: if killer also matches POV, it's a self-kill (rare but possible)
-        if killer and name_matches_pov(killer, pov_rep, pov_cluster, cfg):
-            return "kill", "pov_self_kill"
         return "death", "pov_death"
 
-    # 2. KILL DETECTION: Killer matches POV
     if killer and name_matches_pov(killer, pov_rep, pov_cluster, cfg):
         reason = "pov_partial_killer" if is_partial_fingerprint(fp) else "pov_killer_match"
         return "kill", reason
 
-    # 3. ASSIST FALLBACK: POV assisted (implies POV was involved in the kill)
     if assist and name_matches_pov(assist, pov_rep, pov_cluster, cfg):
         return "kill", "pov_assist_swap"
 
-    # 4. PARTIAL FINGERPRINT HANDLING
-    # For partial reads (single name), check all extracted names
     if is_partial_fingerprint(fp):
-        names = entry_names(entry, fp)
-        
-        # Check if any name matches POV
-        for name in names:
+        for name in entry_names(entry, fp):
             if name_matches_pov(name, pov_rep, pov_cluster, cfg):
                 return "kill", "pov_partial_any"
-        
-        # Single name that's not POV - likely victim-only read
-        # Check if it's clearly a foreign/enemy name
-        if len(names) == 1 and len(names[0]) >= 3:
+        # Red border + single enemy name = OCR read victim only (common CS2 misread).
+        names = entry_names(entry, fp)
+        if len(names) == 1 and len(names[0]) >= 4:
             only = names[0]
             if not name_matches_pov(only, pov_rep, pov_cluster, cfg):
-                # If this name belongs to a different cluster, it's likely an enemy kill
                 if killer_is_foreign(only, pov_cluster, all_clusters, cfg):
-                    return "kill", "pov_partial_victim_foreign"
-        
+                    return "skip", "partial_foreign_skip"
         return "skip", "partial_not_pov"
 
-    # 5. FOREIGN KILLER CHECK
-    # If killer clearly belongs to another cluster, this is NOT a POV kill
     if killer and killer_is_foreign(killer, pov_cluster, all_clusters, cfg):
-        # If victim also doesn't match POV, this is completely unrelated
         if not victim or not name_matches_pov(victim, pov_rep, pov_cluster, cfg):
-            # Check if victim is in a foreign cluster too - if so, skip entirely
-            if victim and killer_is_foreign(victim, pov_cluster, all_clusters, cfg):
-                return "skip", "foreign_both"
-            # Victim might be POV's teammate being killed by enemy - this IS a POV kill
-            # (POV's team got a kill)
-            return "kill", "pov_teammate_kill"
-        # Victim matches POV but killer is foreign - POV was killed by enemy
-        return "death", "pov_killed_by_enemy"
+            return "kill", "pov_foreign_killer_ocr"
+        return "skip", "foreign_killer"
 
-    # 6. TEAMKILL / SELF-KILL EDGE CASES
-    # If both killer and victim are in the POV cluster (teammates)
-    if killer and victim:
-        killer_in_pov = name_matches_pov(killer, pov_rep, pov_cluster, cfg)
-        victim_in_pov = name_matches_pov(victim, pov_rep, pov_cluster, cfg)
-        
-        if not killer_in_pov and not victim_in_pov:
-            # Neither matches POV - check if they're both foreign (ignore)
-            k_foreign = killer_is_foreign(killer, pov_cluster, all_clusters, cfg)
-            v_foreign = killer_is_foreign(victim, pov_cluster, all_clusters, cfg)
-            if k_foreign and v_foreign:
-                return "skip", "foreign_both"
+    if killer and not name_matches_pov(killer, pov_rep, pov_cluster, cfg):
+        vk = normalize_name(victim)
+        kk = normalize_name(killer)
+        if len(kk) >= 4 and (not vk or not name_matches_pov(victim, pov_rep, pov_cluster, cfg)):
+            if vk != kk:
+                return "kill", "pov_enemy_killer_field"
 
-    # 7. FALLBACK: Check any name in the entry
-    # This catches cases where POV name appears anywhere in the feed line
     for name in entry_names(entry, fp):
         if name_matches_pov(name, pov_rep, pov_cluster, cfg):
             return "kill", "pov_name_in_line"
 
-    # Default: No POV match found
     return "skip", "not_pov"
 
 
@@ -1320,6 +1261,14 @@ def run_pipeline(
 
         pov_cluster, all_clusters, coverage = select_pov_cluster(registry, cfg)
         pov_rep = resolve_pov_rep(pov_cluster, pov_player_override)
+        if pov_player_override:
+            cluster_rep_dbg = (
+                normalize_name(pov_cluster["representative"]) if pov_cluster else "?"
+            )
+            _kf_log(
+                f"POV override hint='{pov_player_override}' cluster_rep='{cluster_rep_dbg}' "
+                f"-> using='{pov_rep}'"
+            )
         stats.pov_cluster_coverage = round(coverage, 3) if pov_cluster else 0.0
         partial_mode = bool(pov_rep) and (
             not pov_cluster or coverage < cfg.pov_coverage_min
@@ -1390,9 +1339,7 @@ def run_pipeline(
         reader.close()
 
 
-# Known generic words that appear in YouTube channel names but are unlikely to be CS2 player names.
-# Used as a LAST check only after fuzzy matching fails - not as a hard filter.
-_CHANNEL_BAD_EXACT = frozenset({
+_CHANNEL_BAD = (
     "pov",
     "highlights",
     "gameplay",
@@ -1401,42 +1348,23 @@ _CHANNEL_BAD_EXACT = frozenset({
     "official",
     "channel",
     "gaming",
+    "counter",
+    "strike",
     "limcs",
-})
-
-# These need word boundary checks - "counter" could be in "CounterLogic" which is a valid tag
-_CHANNEL_BAD_BOUNDARY = frozenset({
-    "cs",
-    "csgo",
-    "cs2",
-})
+)
 
 
 def is_plausible_gamertag(name: str) -> bool:
-    """Validate a potential CS2 player name (gamertag).
-    
-    CS2 names can contain: letters, numbers, underscores, hyphens, dots, 
-    brackets, and various other special characters common in gaming tags.
-    """
     n = (name or "").strip()
-    if len(n) < 2 or len(n) > 32:  # CS2 allows up to 32 chars, min 2
+    if len(n) < 3 or len(n) > 22:
         return False
-    # Allow spaces in names (CS2 supports "First Last" style names)
-    # Allow common gamertag characters: letters, numbers, underscore, hyphen, dot, |, etc.
-    if not re.match(r"^[A-Za-z0-9_\-\.\|\[\]\(\)@<>:/\\~`!$%^&*+=? ]+$", n):
-        # Reject if it contains only forbidden characters
-        cleaned = re.sub(r"[A-Za-z0-9_\-\.\|\[\]\(\)@<>:/\\~`!$%^&*+=? ]", "", n)
-        if cleaned:
-            return False
-    # Check for exact matches of generic channel words
-    low = n.lower()
-    if low in _CHANNEL_BAD_EXACT:
+    if " " in n:
         return False
-    # Check word boundaries for game-specific terms
-    for bad in _CHANNEL_BAD_BOUNDARY:
-        # Use word boundary check - "cs" should match "cs" but not "css" or "acs"
-        if re.search(rf'\b{re.escape(bad)}\b', low):
-            return False
+    if not re.match(r"^[A-Za-z0-9_\-]+$", n):
+        return False
+    low = re.sub(r"[^a-z0-9]", "", n.lower())
+    if any(b in low for b in _CHANNEL_BAD):
+        return False
     return True
 
 

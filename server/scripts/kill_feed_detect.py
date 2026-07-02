@@ -8,7 +8,12 @@ import json
 import os
 import sys
 
-from kill_feed_pipeline import KillFeedConfig, kills_to_legacy_events, run_pipeline
+from kill_feed_pipeline import (
+    KillFeedConfig,
+    derive_pov_hint,
+    kills_to_legacy_events,
+    run_pipeline,
+)
 
 
 def ffmpeg_bin():
@@ -77,6 +82,17 @@ def main():
     duration = float(payload.get("duration") or 0)
     title_hints = payload.get("title_hint_tokens") or []
 
+    # POV identity: explicit pov_player wins; otherwise derive a gamertag hint
+    # from channel/title. resolve_pov_rep() only applies it when it disagrees
+    # with the OCR cluster, so a wrong/garbage hint cannot hurt a good cluster.
+    channel = payload.get("channel") or ""
+    title = payload.get("title") or ""
+    pov_player = payload.get("pov_player") or None
+    if not pov_player:
+        pov_player = derive_pov_hint(channel, title)
+    if pov_player:
+        print(f"[kill-feed] pov hint='{pov_player}' (channel/title)", file=sys.stderr, flush=True)
+
     cfg = KillFeedConfig()
     roi = payload.get("roi")
     if isinstance(roi, dict):
@@ -99,6 +115,7 @@ def main():
         duration,
         cfg=cfg,
         title_hint_tokens=title_hints,
+        pov_player_override=pov_player,
         ffmpeg_bin=ffmpeg_bin(),
     )
 

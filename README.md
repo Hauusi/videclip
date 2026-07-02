@@ -4,7 +4,7 @@ YouTube/VOD → AI highlights → vertical clips (Shorts, TikTok, Reels).
 
 > **Living documentation.** This file is the single source of truth for architecture, pipeline behaviour, and production deploy. **Agents must update it in the same session** when adding, removing, or changing features (see `AGENTS.md` and `.cursor/rules/readme-sync.mdc`).
 
-**Last updated:** 2026-06-19 (Shooter pipeline bugfixes — gamertag validation, POV detection, montage coherence)
+**Last updated:** 2026-06-24 (Shooter montage builder — dense POV kill-feed fights stay continuous; preview recuts deduped)
 
 ---
 
@@ -68,7 +68,8 @@ Download → Transcript (YouTube or Groq STT) → Category (gameCategory + visua
 
 ```
 audioEnergyScan → hudKillFeed (Python ROI scan) → filterQualityHudKills
-  → buildSlidingKillChains (2–4 kills within ~18s) → buildHudKillMontageSegments
+  → buildKillMontagePacks (dense fights continuous, wide gaps jump-cut)
+  → buildHudKillMontageSegments
   → shooterHighlightSelect (5 clips, no shared kills) → cutMontageClip (FFmpeg)
 ```
 
@@ -89,8 +90,9 @@ audioEnergyScan → hudKillFeed (Python ROI scan) → filterQualityHudKills
 
 - **`raw_time`** (Python): frame when kill-feed UI flashed — montage anchor source
 - **`shot_time`**: estimated gunshot (earlier) — do **not** use for cuts
-- Anchor: `raw_time - 0.65s` (bottom_kills) via `resolveHudKillAnchor`
-- Per kill: **~0.4s before anchor**, **~4.5s after** → ~4.9s per segment
+- Anchor: `raw_time + hudPeakOffsetSec` via `resolveHudKillAnchor` (no gunshot snap — see below)
+- Dense local fights (≤22s gaps, ≤32s span) stay as **one continuous source window** from first kill lead-in to last kill tail; wider gaps remain jump-cuts.
+- Per jump-cut kill: **~1.0s before anchor**, **~7s after** → ~8s per segment
 - Combat-audio must spike near `raw_time` (`hasCombatAudioNear`)
 - Prefer **`bottom_kills`** ROI (streamer multikill icons) when ≥3 available
 
@@ -106,11 +108,14 @@ audioEnergyScan → hudKillFeed (Python ROI scan) → filterQualityHudKills
 ### Do NOT reintroduce
 
 - Round-robin packing (`allKills.forEach((k,i) => packs[i % 5])`) — caused 500s gaps between kills in one clip
-- `snapPeakToGunshot` for HUD anchors — shifted cuts before visible kill
+- `snapPeakToGunshot` for HUD anchors — shifted cuts up to ~1.5s before the visible kill, clipping the frag; `buildKillSegmentAtAnchor` must anchor on `raw_time + hudPeakOffsetSec` only (snap call removed 2026-06-24)
+- Collapsing Python `two-pass-ocr` POV kills as if they were frame-diff flashes — loses real rapid kills (`98/101/119/122` became `98/119`). Only raw frame-diff HUD flashes should go through `collapseHudEngagements`; OCR kill-feed events are already deduped kills.
+- Score-first HUD de-dupe for dense fights — keeps high-confidence but poorly placed anchors and drops timeline coverage. Use chronological mini-groups and preserve dense fights as continuous windows.
 - Auto `viral_score` from segment count only — use `montageViralScore` in `shooterHighlightSelect.js`
 - Skipping `isCoherentKillMontage` for HUD packs
 - `fallback_red_border` in `kill_feed_pipeline.py` — counted every red-border feed line (~3× false kills); use `killer_matches_pov` only
-- `pov_partial_victim` accept-all on red border — ~52 false kills (enemy names OCR'd as single victim); montage segments then show no frag
+- `pov_partial_victim_foreign` returning `"kill"` — ~52 false kills (enemy names OCR'd as single victim); must return `"skip"` to prevent no-frag montage segments
+- **Override always replacing the OCR cluster rep** — CS2 renders `s1mple` but OCR reliably reads `simple`; forcing the literal gamertag (`s1mple`) lowers fuzzy match vs the rest of the feed. `resolve_pov_rep()` must keep the cluster spelling when override and cluster agree, and only swap in the override on disagreement (wrong cluster)
 - Narrow center crop for landscape 9:16 (`cropH=full, cropW=H*9/16`) — cuts off FPS weapon model; use blur-letterbox in `smartCrop.js`
 - Debug kill-export panel in main UI without `?debug=1` — use `isDebugUiEnabled()` only
 - `gameplayFraming` in `structuralSettingsKey` — triggers FFmpeg preview on toggle; framing is client CSS on raw clip
@@ -131,6 +136,8 @@ ssh -i C:\Users\rapha\.ssh\id_ed25519_hetzner root@62.238.39.31 \
 |-----|----------------|
 | `[kill-feed] POV filter: X kills, Y deaths, Z foreign/skip` | X ≈ POV kill count (~50–70/49min VOD), not ~180 |
 | `[kill-feed] POV skip reasons: {...}` | Most skips should be `not_pov`, not `no_pov` |
+| `[kill-feed] pov hint='…' (channel/title)` | Gamertag derived from metadata (only when channel/title present) |
+| `[kill-feed] POV override hint='…' cluster_rep='…' -> using='…'` | `using` keeps cluster spelling when they agree; swaps to hint only on disagreement |
 | `[hud-quality] X/Y HUD events pass` | X < Y (noise filtered) |
 | `[montage] HUD chains: … → N clips (4+3+…)` | Mixed kill counts |
 | `HUD montage preview: … peak gaps 5s \| 7s` | Gaps **< 18s**, not 500s |
@@ -276,6 +283,10 @@ npm start
 
 | Date | Change |
 |------|--------|
+| 2026-06-24 | **Shooter montage builder:** Dense local POV kill-feed fights now stay continuous (≤22s gaps, ≤32s span) instead of being reduced to two jump-cuts; Python `two-pass-ocr` kill events bypass `collapseHudEngagements`; HUD de-dupe is timeline-grouped instead of score-first; preview rendering dedupes in-flight identical builds and saves cache state with the post-recut raw fingerprint to stop repeated `/api/preview` re-cuts |
+| 2026-06-24 | **Montage timing fix:** HUD/red kill segments widened to ~1.0s pre + ~7s post (`maxSegDur` 8.5) so a kill (and a push into the next frag) isn't clipped at segment end; removed `snapPeakToGunshot` call in `buildKillSegmentAtAnchor` (was shifting the cut before the visible kill). Diagnosed from job `1025114a` hl-0 where seg2 ended at 125.8s right as the B-site frag started |
+| 2026-06-24 | **POV identity:** `hudKillFeed.js` sends `channel`+`title`; `derive_pov_hint()` extracts a gamertag (channel handle, or `<name> POV` title pattern); `resolve_pov_rep()` keeps the OCR cluster spelling when override agrees (e.g. `s1mple`→OCR `simple`) and only swaps in the override when the cluster picked the wrong player. Protects wrong-cluster VODs without degrading good ones |
+| 2026-06-24 | **Bugfix:** Shooter kill detection — `kill_feed_detect.py` now accepts `pov_player` from JSON payload as override for OCR clustering; `classify_registry_entry()` foreign partial kills now return `"skip"` instead of `"kill"` to reduce ~52 false kills per VOD |
 | 2026-06-19 | **Bugfix:** Shooter pipeline fixes — fixed `is_plausible_gamertag()` character whitelist (was rejecting valid CS2 names), improved `classify_registry_entry()` POV detection logic, fixed `red_highlight` marking for all kills, fixed `isCoherentKillMontage()` to always reject wide-gap montages, added `bottom_kills` ROI support, improved audio peak detection in `hasCombatAudioNear()` |
 | 2026-06-19 | **Maintenance:** Monthly cron jobs (`0 7 1 * *`) — deep cleanup + analytics report; both run immediately on startup |
 | 2026-06-12 | **UI:** Montage-Live-Preview — aktiver Kill-Index beim Segmentwechsel (überlappende Source-Zeiten); Playhead/Video bleiben auf Kill 2 statt zurück auf Kill 1 |

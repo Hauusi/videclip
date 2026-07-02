@@ -18,6 +18,8 @@ import { resolveMusicForClip } from './music.js';
 import { prepareExportRawClip } from './clipExport.js';
 import { config } from '../config.js';
 
+const inFlightPreviews = new Map();
+
 function stableHash(obj) {
   return createHash('sha256').update(JSON.stringify(obj)).digest('hex').slice(0, 16);
 }
@@ -212,7 +214,29 @@ async function runFastMusicMix({
 /**
  * Tiered preview: reuse cached FFmpeg passes when only music/captions/grade change.
  */
-export async function runTieredPreview({
+export async function runTieredPreview(args) {
+  const key = stableHash({
+    jobId: args.jobId,
+    highlightId: args.hl?.id,
+    settings: args.settings || {},
+    renderSettings: args.meta?.renderSettings || {},
+    sourceDuration: args.meta?.sourceDuration,
+    rawClipPath: args.hl?.rawClipPath,
+    rawClipUrl: args.hl?.rawClipUrl,
+    montageSegments: args.hl?.montage_segments || null,
+    start: args.hl?.start_time,
+    end: args.hl?.end_time,
+  });
+  if (inFlightPreviews.has(key)) {
+    console.log(`[preview] ${args.hl?.id || '?'} join in-flight`);
+    return inFlightPreviews.get(key);
+  }
+  const run = runTieredPreviewBuild(args).finally(() => inFlightPreviews.delete(key));
+  inFlightPreviews.set(key, run);
+  return run;
+}
+
+async function runTieredPreviewBuild({
   jobId,
   jobWorkDir,
   meta,
@@ -281,7 +305,7 @@ export async function runTieredPreview({
       : null;
 
   const rawFp = await fileFingerprint(rawPathGuess);
-  const keys = buildPreviewKeys({
+  let keys = buildPreviewKeys({
     exportSettings,
     settings,
     previewRender,
@@ -399,6 +423,17 @@ export async function runTieredPreview({
           renderSettings: previewRender,
         })
       : null;
+  const renderedRawFp = await fileFingerprint(rawPath);
+  keys = buildPreviewKeys({
+    exportSettings,
+    settings,
+    previewRender,
+    hl,
+    rawPath: renderedRawFp,
+    musicResolved,
+    processHighlight,
+    previewWide,
+  });
   const boostOpts = getClipBoostRenderOptions(hl);
   const clipOptions = {
     aspectRatio: previewRender.aspectRatio || settings.aspectRatio || '9:16',

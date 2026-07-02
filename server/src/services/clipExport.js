@@ -108,9 +108,9 @@ export function buildExportHighlight(hl, settings = {}, sourceDuration = 0) {
       (s, seg) => s + (Number(seg.duration) || 0),
       0,
     );
-    highlight.montage_kill_count = settings.montage_segments.filter(
-      (s) => s.segment_type !== 'payoff',
-    ).length;
+    highlight.montage_kill_count = settings.montage_segments
+      .filter((s) => s.segment_type !== 'payoff')
+      .reduce((sum, seg) => sum + (Number(seg.kill_count) || 1), 0);
   }
 
   return highlight;
