@@ -68,6 +68,11 @@ export async function scanShooterKillFeed(
       full_vod_scan: true,
       kill_feed_debug: true,
       debug_dir: debugDir,
+      // POV identity hints: Python derives a gamertag override only when it
+      // disagrees with the OCR cluster (protects against a wrong cluster rep,
+      // never overrides the OCR spelling of a correct one).
+      channel: channel || '',
+      title: title || '',
     });
 
     const env = { ...process.env, FFMPEG_PATH: path.resolve(ffmpegPath) };

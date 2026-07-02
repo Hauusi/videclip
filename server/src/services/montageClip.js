@@ -34,6 +34,9 @@ export const KILLS_PER_CLIP_TARGET = 5;
 /** Max gap between consecutive kills in one burst montage (real multikill round). */
 export const MONTAGE_BURST_MAX_GAP_SEC = 22;
 export const MONTAGE_BURST_MAX_SPAN_SEC = 55;
+/** Dense local fights should stay continuous; jump-cuts can hide the actual frag. */
+export const CONTINUOUS_FIGHT_MAX_GAP_SEC = 22;
+export const CONTINUOUS_FIGHT_MAX_SPAN_SEC = 32;
 /** Max gap between consecutive kills in one jump-cut montage (e.g. 4:25 → 5:32). */
 export const HUD_CLUSTER_MAX_GAP_SEC = 95;
 export const HUD_CLUSTER_MAX_SPAN_SEC = 600;
@@ -42,7 +45,7 @@ export const MIN_MONTAGE_SOURCE_GAP_SEC = 30;
 /** Min VOD span for a montage chain (kills far apart in source). */
 export const MIN_MONTAGE_CHAIN_SPAN_SEC = 75;
 /** Reject montages that jump across unrelated VOD sections. */
-export const MAX_KILL_GAP_IN_MONTAGE_SEC = 22;
+export const MAX_KILL_GAP_IN_MONTAGE_SEC = 35;
 export const PREFERRED_CHAIN_KILLS = 4;
 export const MIN_CHAIN_KILLS = 2;
 
@@ -66,25 +69,29 @@ export const KILL_ONLY_TIMING = {
 export const HUD_KILL_TIMING = {
   ...KILL_ONLY_TIMING,
   clipBefore: 1.2,
-  clipAfter: 6.0,
+  clipAfter: 7.0,
   segBefore: 1.2,
-  segAfter: 6.0,
-  maxSegDur: 7.4,
+  segAfter: 7.0,  // post-roll long enough that the frag + follow-up are not cut
+  maxSegDur: 8.5,
   minSegDur: 4.5,
-  maxTotal: 42,
+  maxTotal: 44,
   hudPeakOffsetSec: 0,
 };
 
-/** Red kill-feed: anchor BEFORE flash (frag first), long post-roll for body drop. */
+/**
+ * Red kill-feed: anchor BEFORE flash (frag first), long post-roll for body drop.
+ * Pre/post-roll widened (was 0.4/4.5) so the kill sequence after the feed flash
+ * — including a push into the next frag — is no longer clipped at segment end.
+ */
 export const RED_HIGHLIGHT_KILL_TIMING = {
   clipBefore: 2.0,
-  clipAfter: 6.0,
-  segBefore: 2.0,
-  segAfter: 6.0,
-  maxSegDur: 8,
-  minSegDur: 5.5,
-  maxTotal: 32,
-  hudPeakOffsetSec: -1.8,
+  clipAfter: 7.0,
+  segBefore: 1.0,  // ~1s before anchor for lead-in/context
+  segAfter: 7.0,  // ~7s after for kill + body drop + follow-up
+  maxSegDur: 8.5,
+  minSegDur: 4.5,
+  maxTotal: 40,
+  hudPeakOffsetSec: -0.85,  // README: anchor raw_time - 0.85s for top_right
   fixedKillWindow: false,
 };
 
@@ -126,6 +133,7 @@ export const SINGLE_KILL_TIMING = {
 export const MAX_KILL_SEG_BEFORE_SEC = 3;
 /** Met via multiple tight kill cuts, not pre-kill walking padding. */
 export const MIN_SHOOTER_MONTAGE_SEC = 12;
+export const HUD_EVENT_DEDUPE_GAP_SEC = 1.6;
 
 /**
  * Anchor on kill moment: CS2 feed flashes AFTER the frag.
@@ -198,7 +206,8 @@ export const PAYOFF_TIMING = {
 export function countKillSegments(segments) {
   if (!segments?.length) return 0;
   const kills = segments.filter((s) => s.segment_type !== 'payoff');
-  return kills.length || segments.length;
+  const weighted = kills.reduce((sum, seg) => sum + (Number(seg.kill_count) || 1), 0);
+  return weighted || segments.length;
 }
 
 /** Kill-count-based segment timing (more kills → longer montage toward MIN_SHOOTER_MONTAGE_SEC). */
@@ -248,17 +257,10 @@ export function buildKillSegmentAtAnchor(
   audioScan = null,
 ) {
   const event = typeof killEvent === 'object' && killEvent !== null ? killEvent : { time: killEvent };
-  let anchor = resolveHudKillAnchor(event, event?.roi ?? '', timing);
-  const rawHud = getHudEventTime(event);
-  if (
-    audioScan &&
-    (event.player_kill || event.red_highlight || event.validated_by === 'red-highlight')
-  ) {
-    const snapped = snapPeakToGunshot(rawHud, audioScan);
-    if (snapped > 0 && Math.abs(snapped - rawHud) <= 2.8) {
-      anchor = snapped;
-    }
-  }
+  // Anchor stays on the kill-feed timeline (raw_time + hudPeakOffsetSec).
+  // Do NOT snap HUD anchors to gunshot audio — it shifts the cut up to ~1.5s
+  // before the visible kill, clipping the frag (see README "Do NOT reintroduce").
+  const anchor = resolveHudKillAnchor(event, event?.roi ?? '', timing);
   const segBefore = timing.segBefore ?? timing.clipBefore ?? effectiveSegBefore(timing);
   let segAfter = timing.segAfter ?? timing.clipAfter ?? 4.5;
   if (!timing.fixedKillWindow && nextKillEvent) {
@@ -302,7 +304,7 @@ export function buildHudKillMontageSegments(
   timing = HUD_KILL_TIMING,
   audioScan = null,
 ) {
-  const kills = dedupeHudKillEvents(killEvents, MIN_KILL_PEAK_GAP_SEC, MAX_MONTAGE_KILL_SEGMENTS);
+  const kills = dedupeHudKillEvents(killEvents, HUD_EVENT_DEDUPE_GAP_SEC, MAX_MONTAGE_KILL_SEGMENTS);
   if (kills.length < 2) return null;
 
   const montage_segments = [];
@@ -334,6 +336,61 @@ export function buildHudKillMontageSegments(
     source_span_end: Math.round((last.start + last.duration) * 10) / 10,
     montage_kill_count: trimmed.length,
     timing_profile: timing,
+  };
+}
+
+function isDenseLocalFight(kills) {
+  if (!kills?.length || kills.length < 2) return false;
+  const times = kills.map(getHudEventTime).sort((a, b) => a - b);
+  const span = times[times.length - 1] - times[0];
+  if (span > CONTINUOUS_FIGHT_MAX_SPAN_SEC) return false;
+  for (let i = 1; i < times.length; i++) {
+    if (times[i] - times[i - 1] > CONTINUOUS_FIGHT_MAX_GAP_SEC) return false;
+  }
+  return true;
+}
+
+function buildContinuousFightWindow(kills, videoDuration, timing = HUD_KILL_TIMING) {
+  const sorted = [...(kills || [])]
+    .filter((e) => e && Number.isFinite(getHudEventTime(e)))
+    .sort((a, b) => getHudEventTime(a) - getHudEventTime(b));
+  if (!isDenseLocalFight(sorted)) return null;
+
+  const anchors = sorted.map((event) => resolveHudKillAnchor(event, event?.roi ?? '', timing));
+  const firstAnchor = anchors[0];
+  const lastAnchor = anchors[anchors.length - 1];
+  const segBefore = Math.max(1.2, timing.segBefore ?? timing.clipBefore ?? 1.2);
+  const segAfter = Math.max(8.0, timing.segAfter ?? timing.clipAfter ?? 7.0);
+  let start = Math.max(0, firstAnchor - segBefore);
+  let end = Math.min(videoDuration, lastAnchor + segAfter);
+  if (end - start < MIN_SHOOTER_MONTAGE_SEC) {
+    end = Math.min(videoDuration, start + MIN_SHOOTER_MONTAGE_SEC);
+  }
+  if (end <= start || end - start < 4) return null;
+
+  const duration = Math.round((end - start) * 10) / 10;
+  const segment = {
+    start: Math.round(start * 10) / 10,
+    duration,
+    peak_time: Math.round(firstAnchor * 10) / 10,
+    raw_time: Math.round(getHudEventTime(sorted[0]) * 10) / 10,
+    hud_flash_time: Math.round(getHudEventTime(sorted[0]) * 10) / 10,
+    segment_type: 'kill',
+    hud_roi: sorted[0].roi,
+    confidence: Math.max(...sorted.map((k) => k.confidence ?? 0.5)),
+    kill_count: sorted.length,
+    kill_times: sorted.map((k) => Math.round(getHudEventTime(k) * 10) / 10),
+    continuous_fight: true,
+  };
+
+  return {
+    montage_segments: [segment],
+    output_duration: duration,
+    source_span_start: segment.start,
+    source_span_end: Math.round((segment.start + segment.duration) * 10) / 10,
+    montage_kill_count: sorted.length,
+    timing_profile: timing,
+    continuous_fight: true,
   };
 }
 
@@ -605,34 +662,50 @@ export function collapseHudEngagements(events, audioScan = null, gapSec = HUD_EN
   return out;
 }
 
+function hudEventScore(event) {
+  return (
+    (event.player_kill || event.red_highlight ? 50 : 0) +
+    (event.highlight_score ?? 0) * 30 +
+    (event.kill_quality_score ?? 0) * 0.5 +
+    (event.confidence ?? 0) * 12 +
+    ((event.roi || '').startsWith('top_right') ? 4 : 0)
+  );
+}
+
+function pickBestTimelineEvent(group) {
+  return [...group].sort((a, b) => {
+    const scoreDelta = hudEventScore(b) - hudEventScore(a);
+    if (Math.abs(scoreDelta) > 0.05) return scoreDelta;
+    return getHudEventTime(a) - getHudEventTime(b);
+  })[0];
+}
+
 /** Pick real kill moments from raw HUD events (kill-feed preferred). */
-export function dedupeHudKillEvents(events, minGap = MIN_KILL_PEAK_GAP_SEC, maxKills = MAX_MONTAGE_KILL_SEGMENTS) {
+export function dedupeHudKillEvents(
+  events,
+  minGap = HUD_EVENT_DEDUPE_GAP_SEC,
+  maxKills = MAX_MONTAGE_KILL_SEGMENTS,
+) {
   if (!events?.length) return [];
   const topRight = events.filter((e) => (e.roi || '').startsWith('top_right'));
-  const pool = topRight.length >= 2 ? topRight : events;
-
-  const scored = [...pool].sort((a, b) => {
-    const scoreA =
-      (a.player_kill || a.red_highlight ? 50 : 0) +
-      (a.highlight_score ?? 0) * 30 +
-      (a.kill_quality_score ?? 0) * 0.5 +
-      (a.confidence ?? 0) * 12;
-    const scoreB =
-      (b.player_kill || b.red_highlight ? 50 : 0) +
-      (b.highlight_score ?? 0) * 30 +
-      (b.kill_quality_score ?? 0) * 0.5 +
-      (b.confidence ?? 0) * 12;
-    return scoreB - scoreA;
-  });
+  const pool = (topRight.length >= 2 ? topRight : events)
+    .filter((e) => e && Number.isFinite(getHudEventTime(e)))
+    .sort((a, b) => getHudEventTime(a) - getHudEventTime(b));
 
   const picked = [];
-  for (const event of scored) {
+  let group = [];
+  for (const event of pool) {
     const t = getHudEventTime(event);
-    if (picked.some((p) => Math.abs(getHudEventTime(p) - t) < minGap)) continue;
-    picked.push(event);
-    if (picked.length >= maxKills) break;
+    const last = group[group.length - 1];
+    if (!last || t - getHudEventTime(last) <= minGap) {
+      group.push(event);
+      continue;
+    }
+    picked.push(pickBestTimelineEvent(group));
+    group = [event];
   }
-  return picked.sort((a, b) => getHudEventTime(a) - getHudEventTime(b));
+  if (group.length) picked.push(pickBestTimelineEvent(group));
+  return picked.slice(0, maxKills);
 }
 
 /** Tight combat clusters — each becomes one jump-cut montage. */
@@ -655,12 +728,12 @@ export function clusterHudKillEvents(
     if (gap <= maxGapSec && span <= maxSpanSec) {
       current.push(sorted[i]);
     } else {
-      const kills = dedupeHudKillEvents(current, MIN_KILL_PEAK_GAP_SEC, MAX_MONTAGE_KILL_SEGMENTS);
+      const kills = dedupeHudKillEvents(current, HUD_EVENT_DEDUPE_GAP_SEC, MAX_MONTAGE_KILL_SEGMENTS);
       if (kills.length >= 2) clusters.push({ kills });
       current = [sorted[i]];
     }
   }
-  const kills = dedupeHudKillEvents(current, MIN_KILL_PEAK_GAP_SEC, MAX_MONTAGE_KILL_SEGMENTS);
+  const kills = dedupeHudKillEvents(current, HUD_EVENT_DEDUPE_GAP_SEC, MAX_MONTAGE_KILL_SEGMENTS);
   if (kills.length >= 2) clusters.push({ kills });
 
   return clusters;
@@ -784,8 +857,14 @@ export function buildSlidingKillChains(
 
 /** True when two montages reuse the same HUD kill (±3s). */
 export function montagesShareKill(a, b, gapSec = 3) {
-  const peaksA = (a?.montage_segments || []).map((s) => s.peak_time ?? s.start);
-  const peaksB = (b?.montage_segments || []).map((s) => s.peak_time ?? s.start);
+  const segmentTimes = (candidate) =>
+    (candidate?.montage_segments || []).flatMap((s) =>
+      Array.isArray(s.kill_times) && s.kill_times.length
+        ? s.kill_times
+        : [s.peak_time ?? s.start],
+    );
+  const peaksA = segmentTimes(a);
+  const peaksB = segmentTimes(b);
   for (const ta of peaksA) {
     for (const tb of peaksB) {
       if (Math.abs(ta - tb) < gapSec) return true;
@@ -892,7 +971,7 @@ export function partitionKillsIntoBurstPacks(
 
 /** One clip per pack: 1 kill = single segment, 2–4 kills = jump-cut montage. */
 export function buildHudKillClipFromPack(kills, videoDuration, options = {}) {
-  const list = dedupeHudKillEvents(kills, MIN_KILL_PEAK_GAP_SEC, MAX_MONTAGE_KILL_SEGMENTS);
+  const list = dedupeHudKillEvents(kills, HUD_EVENT_DEDUPE_GAP_SEC, MAX_MONTAGE_KILL_SEGMENTS);
   if (!list.length) return null;
 
   const audioScan = options.audioScan;
@@ -901,6 +980,35 @@ export function buildHudKillClipFromPack(kills, videoDuration, options = {}) {
   )
     ? RED_HIGHLIGHT_KILL_TIMING
     : HUD_KILL_TIMING;
+
+  const continuous = buildContinuousFightWindow(list, videoDuration, timing);
+  if (continuous) {
+    const avgConf =
+      list.reduce((sum, k) => sum + (k.confidence ?? 0.5), 0) / Math.max(1, list.length);
+    const span = getHudEventTime(list[list.length - 1]) - getHudEventTime(list[0]);
+    return {
+      montage_type: 'shooter_multikill',
+      clip_type: 'shooter_multikill',
+      montage_kill_count: list.length,
+      start: continuous.source_span_start,
+      end: continuous.source_span_end,
+      start_time: continuous.source_span_start,
+      end_time: continuous.source_span_end,
+      local_score: 58 + list.length * 24,
+      composite: 58 + list.length * 24,
+      flags: ['hud-kills', 'hud-chain', 'continuous-fight'],
+      montage_segments: continuous.montage_segments,
+      output_duration: continuous.output_duration,
+      source_span_start: continuous.source_span_start,
+      source_span_end: continuous.source_span_end,
+      confidence: Math.min(95, Math.round(avgConf * 100)),
+      arcLabel: 'hud-kill-chain',
+      chain_span: Math.round(span * 10) / 10,
+      hudKills: list.length,
+      hypeMoment: true,
+      excerpt: `${list.length} HUD kills · ${continuous.output_duration}s continuous fight`,
+    };
+  }
 
   if (list.length === 1) {
     const seg = buildKillSegmentAtAnchor(list[0], videoDuration, timing, null, audioScan);
@@ -945,7 +1053,13 @@ export function buildHudKillClipFromPack(kills, videoDuration, options = {}) {
  */
 export function buildKillMontagePacks(events, videoDuration, options = {}) {
   let engagements = events;
-  if (!events.some((e) => e.validated_by === 'red-highlight' || e.validated_by === 'audio+hud')) {
+  const alreadyResolvedKillFeed = events.some(
+    (e) => e?.player_kill && (e.method === 'two-pass-ocr' || e.pov_reason),
+  );
+  if (
+    !alreadyResolvedKillFeed &&
+    !events.some((e) => e.validated_by === 'red-highlight' || e.validated_by === 'audio+hud')
+  ) {
     engagements = collapseHudEngagements(events, options.audioScan);
     if (engagements.length !== events.length) {
       console.log(
@@ -998,47 +1112,24 @@ export function montageUsesWideSourceGaps(candidate) {
   return false;
 }
 
-/** Reject montages that jump across the VOD (e.g. kill at 19s then 400s).
- * 
- * IMPORTANT: Never allow wide-gap montages that stitch kills from distant parts
- * of the VOD together. This creates incoherent clips with large dead time.
- * Each montage must represent a single local combat sequence.
- */
-export function isCoherentKillMontage(candidate) {
+/** Reject montages that jump across the VOD (e.g. kill at 19s then 400s). */
+export function isCoherentKillMontage(candidate, { wideGap } = {}) {
   const segs = (candidate?.montage_segments || []).filter((s) => s.segment_type !== 'payoff');
   if (segs.length < 1) return false;
   if (segs.length === 1) return true;
-  
-  // STRICT: Always check for wide gaps - never allow wide-gap stitching
-  // This enforces the rule: kills in a montage must be from a single local sequence
-  for (let i = 1; i < segs.length; i++) {
-    const prev = segs[i - 1].peak_time ?? segs[i - 1].start;
-    const curr = segs[i].peak_time ?? segs[i].start;
-    const gap = curr - prev;
-    // Log wide gaps for debugging but always reject them
-    if (gap > MAX_KILL_GAP_IN_MONTAGE_SEC) {
-      console.log(`[montage-coherence] REJECTED: gap ${gap.toFixed(1)}s > ${MAX_KILL_GAP_IN_MONTAGE_SEC}s (kill ${i} to ${i+1})`);
-      return false;
+  const useWideGap = wideGap ?? montageUsesWideSourceGaps(candidate);
+  if (!useWideGap) {
+    for (let i = 1; i < segs.length; i++) {
+      const prev = segs[i - 1].peak_time ?? segs[i - 1].start;
+      const curr = segs[i].peak_time ?? segs[i].start;
+      if (curr - prev > MAX_KILL_GAP_IN_MONTAGE_SEC) return false;
     }
   }
-  
   const span =
     (segs[segs.length - 1].peak_time ?? segs[segs.length - 1].start) -
     (segs[0].peak_time ?? segs[0].start);
-  
-  // Reject if total span too long for a burst montage
-  if (span > MONTAGE_BURST_MAX_SPAN_SEC) {
-    console.log(`[montage-coherence] REJECTED: span ${span.toFixed(1)}s > ${MONTAGE_BURST_MAX_SPAN_SEC}s (burst limit)`);
-    return false;
-  }
-  
-  // Reject if span exceeds absolute maximum
-  if (span > HUD_CLUSTER_MAX_SPAN_SEC) {
-    console.log(`[montage-coherence] REJECTED: span ${span.toFixed(1)}s > ${HUD_CLUSTER_MAX_SPAN_SEC}s (absolute limit)`);
-    return false;
-  }
-  
-  return true;
+  if (!useWideGap && span > MONTAGE_BURST_MAX_SPAN_SEC) return false;
+  return span <= HUD_CLUSTER_MAX_SPAN_SEC;
 }
 
 /**
@@ -1065,12 +1156,14 @@ export function buildHudMontageCandidate(cluster, videoDuration, options = {}) {
   const useRedHighlightTiming = redHighlightKills >= kills.length / 2;
   
   const timing = useRedHighlightTiming ? RED_HIGHLIGHT_KILL_TIMING : HUD_KILL_TIMING;
-  const built = buildHudKillMontageSegments(kills, videoDuration, timing, audioScan);
-  if (!built?.montage_segments?.length || built.montage_segments.length < 2) return null;
+  const built =
+    buildContinuousFightWindow(kills, videoDuration, timing) ||
+    buildHudKillMontageSegments(kills, videoDuration, timing, audioScan);
+  if (!built?.montage_segments?.length || countKillSegments(built.montage_segments) < 2) return null;
 
   const avgConf =
     kills.reduce((sum, k) => sum + (k.confidence ?? 0.5), 0) / Math.max(1, kills.length);
-  const killCount = built.montage_segments.length;
+  const killCount = countKillSegments(built.montage_segments);
   const localScore = 50 + killCount * 22;
 
   const montage_segments = built.montage_segments.map((seg) => ({
@@ -1088,7 +1181,10 @@ export function buildHudMontageCandidate(cluster, videoDuration, options = {}) {
     end_time: built.source_span_end,
     local_score: localScore,
     composite: localScore,
-    flags: ['hud-kills', 'multikill-montage'],
+    flags: [
+      'hud-kills',
+      built.continuous_fight ? 'continuous-fight' : 'multikill-montage',
+    ],
     montage_segments,
     output_duration: built.output_duration,
     source_span_start: built.source_span_start,
