@@ -1,0 +1,64 @@
+audit_eval 2026-07-04T19:28:58.462103+00:00
+POV='slmple' tolerance=±2.0s
+TP=11 FP=18 FN=21 | P=37.9% R=34.4% F1=0.361
+pipeline kills=29 registry=0
+
+=== FALSE NEGATIVES (root cause) ===
+  FN GT 38.0s: BAR_OK_SKIP @ t=43.0s (GT+5.0s) -> skip/partial_not_pov k='виз' v=''
+  FN GT 61.0s: BAR_OK_SKIP @ t=62.0s (GT+1.0s) -> skip/partial_not_pov k='еречи' v=''
+  FN GT 184.0s: BAR_OK_SKIP @ t=183.0s (GT+-1.0s) -> skip/partial_not_pov k='aga' v=''
+  FN GT 236.0s: BAR_OK_SKIP @ t=239.0s (GT+3.0s) -> skip/not_pov k='azotr' v='lewis'
+  FN GT 529.0s: PIPELINE_MISS @ t=532.0s (GT+3.0s) OCR ok but kein Output-Kill
+  FN GT 662.0s: BAR_OK_SKIP @ t=663.0s (GT+1.0s) -> skip/not_pov k='impte' v='rrenbaratic'
+  FN GT 759.0s: BAR_OK_SKIP @ t=760.0s (GT+1.0s) -> skip/not_pov k='toe' v='oseenn'
+  FN GT 790.0s: BAR_OK_SKIP @ t=792.0s (GT+2.0s) -> skip/partial_not_pov k='fave' v=''
+  FN GT 791.0s: BAR_OK_SKIP @ t=792.0s (GT+1.0s) -> skip/partial_not_pov k='fave' v=''
+  FN GT 806.0s: BAR_OK_SKIP @ t=808.0s (GT+2.0s) -> skip/not_pov k='eon' v='ean'
+  FN GT 814.0s: ANCHOR_NEAR @ bar t=813.0s det=[809.75] (Dedup/Lag?)
+  FN GT 821.0s: BAR_OK_SKIP @ t=826.0s (GT+5.0s) -> skip/partial_not_pov k='tee' v=''
+  FN GT 823.0s: BAR_OK_SKIP @ t=826.0s (GT+3.0s) -> skip/partial_not_pov k='tee' v=''
+  FN GT 863.0s: BAR_OK_SKIP @ t=864.0s (GT+1.0s) -> skip/partial_not_pov k='194' v=''
+  FN GT 889.0s: BAR_BAD_OCR @ t=890.0s (GT+1.0s) h=26px raw='|'
+  FN GT 931.0s: BAR_BAD_OCR @ t=935.0s (GT+4.0s) h=32px raw='| ¢ ia? — ‘= Г'
+  FN GT 1008.0s: BAR_OK_SKIP @ t=1010.0s (GT+2.0s) -> skip/partial_not_pov k='lente' v=''
+  FN GT 1040.0s: BAR_OK_SKIP @ t=1041.0s (GT+1.0s) -> skip/partial_not_pov k='роиа' v=''
+  FN GT 1081.0s: BAR_OK_SKIP @ t=1084.0s (GT+3.0s) -> skip/partial_not_pov k='cee' v=''
+  FN GT 1106.0s: BAR_OK_SKIP @ t=1106.0s (GT+0.0s) -> skip/not_pov k='katme-' v='egaratte'
+  FN GT 1162.0s: BAR_OK_SKIP @ t=1160.0s (GT+-2.0s) -> skip/partial_not_pov k='ope' v=''
+
+=== FALSE POSITIVES ===
+  FP det 66.09s: killer='slmpite' victim='graferko' | reason=pov_killer_match | bar@~68s h=26px valid=False raw=''
+  FP det 100.48s: killer='slmple' victim='tus' | reason=pov_killer_match | bar@~103s h=26px valid=True raw='slmpte Kee\n'
+  FP det 119.12s: killer='mele' victim='cacan' | reason=pov_killer_match | bar@~121s h=32px valid=True raw='moete ro eann\n'
+  FP det 312.15s: killer='simp' victim='octane' | reason=pov_killer_match | bar@~312s h=32px valid=False raw='_ ee\n'
+  FP det 317.25s: killer='спор' victim='craterko' | reason=pov_assist_swap | bar@~320s h=32px valid=True raw=' -___ ge 1. РИ\n'
+  FP det 319.17s: killer='olmple' victim='geaferko' | reason=pov_killer_match | bar@~321s h=32px valid=True raw='> Simple 977 > c efecto |\n'
+  FP det 362.58s: killer='iimpiekatke-' victim='pte' | reason=pov_killer_match | bar@~365s h=27px valid=True raw='jnpie-Katke- Pree\n'
+  FP det 365.08s: killer='mote' victim='sie' | reason=pov_killer_match | bar@~367s h=25px valid=False raw=''
+  FP det 407.25s: killer='atte' victim='hdl' | reason=pov_killer_match | bar@~410s h=32px valid=True raw='gece rr nll _\n'
+  FP det 470.08s: killer='simple' victim='tes' | reason=pov_killer_match | bar@~472s h=22px valid=True raw='|. Rae Me | р\n'
+  FP det 647.76s: killer='heals' victim='poeaeeetee' | reason=pov_assist_swap | bar@~650s h=25px valid=False raw='№ — г\n'
+  FP det 669.17s: killer='imple' victim='ope' | reason=pov_killer_match | bar@~671s h=16px valid=True raw='aie\n' | WARN_BAR_HEIGHT
+  FP det 690.09s: killer='pade' victim='bitte' | reason=pov_killer_match | bar@~692s h=32px valid=False raw='ыы - .\n'
+  FP det 762.25s: killer='almpte' victim='enenaa' | reason=pov_killer_match | bar@~764s h=32px valid=False raw='Ea oe\n'
+  FP det 809.75s: killer='elmple' victim='' | reason=pov_partial_killer | bar@~812s h=22px valid=True raw='a elmple -A_F-o 7\n'
+  FP det 844.75s: killer='gael' victim='graterko' | reason=pov_killer_match | bar@~847s h=22px valid=True raw='. gael Graterko\n'
+  FP det 1089.17s: killer='lewle' victim='ezolr' | reason=pov_killer_match | bar@~1091s h=22px valid=True raw='| р | сое ow ато В\n'
+  FP det 1170.08s: killer='ma3le' victim='' | reason=pov_partial_killer | bar@~1172s h=32px valid=False raw='НИ =o\n'
+
+=== TRUE POSITIVES (timing + bar quality) ===
+  TP GT 97.0s -> det 97.76s (Δ+0.8s)
+  TP GT 119.0s -> det 118.25s (Δ-0.8s)
+  TP GT 277.0s -> det 275.61s (Δ-1.4s)
+  TP GT 316.0s -> det 314.75s (Δ-1.2s)
+  TP GT 362.0s -> det 360.61s (Δ-1.4s)
+  TP GT 467.0s -> det 465.09s (Δ-1.9s) WARN timing delta=-1.9s
+  TP GT 669.0s -> det 667.25s (Δ-1.8s) WARN timing delta=-1.8s
+  TP GT 826.0s -> det 824.75s (Δ-1.2s)
+  TP GT 878.0s -> det 879.92s (Δ+1.9s) WARN timing delta=+1.9s
+  TP GT 907.0s -> det 907.42s (Δ+0.4s)
+  TP GT 1037.0s -> det 1037.59s (Δ+0.6s)
+
+=== SUMMARY ===
+TP with bar/timing warnings: 0/11
+Audit PNGs: /tmp/videclip-eval/fn_diag/audit

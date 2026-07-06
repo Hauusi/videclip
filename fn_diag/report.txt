@@ -1,0 +1,44 @@
+fn_diag regeneration (highlight v12 + feed persist 10s)
+POV: simple
+
+=== fn1 GT 38.0s | pass1 sample 38.0s ===
+  fn1_coarse t=38.0s: 0 bars (kein Killfeed in ROI — HUD leer / Feed noch nicht da)
+  fn1 t=38.0s: 0 bars (kein Killfeed in ROI — HUD leer / Feed noch nicht da)
+  fn1_s-3 t=35.0s: 0 bars (kein Killfeed in ROI — HUD leer / Feed noch nicht da)
+  fn1_s-2 t=36.0s: 0 bars (kein Killfeed in ROI — HUD leer / Feed noch nicht da)
+  fn1_s-1 t=37.0s: 0 bars (kein Killfeed in ROI — HUD leer / Feed noch nicht da)
+  fn1_s+1 t=39.0s: 1 bar(s)
+    bar0 h=28px hs=0.587 raw='' valid=False -> skip/not_pov
+  fn1_s+2 t=40.0s: 1 bar(s)
+    bar0 h=26px hs=0.633 raw='' valid=False -> skip/not_pov
+  fn1_s+3 t=41.0s: 1 bar(s)
+    bar0 h=34px hs=0.514 raw='' valid=False -> skip/not_pov
+  >> erster Feed in ROI: t=39.0s (GT+1.0s)
+
+=== fn2 GT 61.0s | pass1 sample 60.5s ===
+  fn2_coarse t=60.5s: 0 bars (kein Killfeed in ROI — HUD leer / Feed noch nicht da)
+  fn2 t=61.0s: 0 bars (kein Killfeed in ROI — HUD leer / Feed noch nicht da)
+  fn2_s-3 t=58.0s: 0 bars (kein Killfeed in ROI — HUD leer / Feed noch nicht da)
+  fn2_s-2 t=59.0s: 0 bars (kein Killfeed in ROI — HUD leer / Feed noch nicht da)
+  fn2_s-1 t=60.0s: 0 bars (kein Killfeed in ROI — HUD leer / Feed noch nicht da)
+  fn2_s+1 t=62.0s: 1 bar(s)
+    bar0 h=32px hs=1.409 raw='И ЕРЕЧИ\n' valid=True -> skip/partial_not_pov
+  fn2_s+2 t=63.0s: 1 bar(s)
+    bar0 h=32px hs=1.336 raw='a\n' valid=False -> skip/not_pov
+  fn2_s+3 t=64.0s: 1 bar(s)
+    bar0 h=27px hs=0.903 raw='ВИТ... 2. |\n' valid=True -> skip/partial_not_pov
+  >> erster Feed in ROI: t=62.0s (GT+1.0s)
+
+=== fn3 GT 97.0s | pass1 sample 96.5s ===
+  fn3_coarse t=96.5s: 0 bars (kein Killfeed in ROI — HUD leer / Feed noch nicht da)
+  fn3 t=97.0s: 0 bars (kein Killfeed in ROI — HUD leer / Feed noch nicht da)
+  fn3_s-3 t=94.0s: 0 bars (kein Killfeed in ROI — HUD leer / Feed noch nicht da)
+  fn3_s-2 t=95.0s: 0 bars (kein Killfeed in ROI — HUD leer / Feed noch nicht da)
+  fn3_s-1 t=96.0s: 0 bars (kein Killfeed in ROI — HUD leer / Feed noch nicht da)
+  fn3_s+1 t=98.0s: 1 bar(s)
+    bar0 h=28px hs=0.613 raw='stImpte on ae !\n' valid=True -> kill/pov_partial_killer
+  fn3_s+2 t=99.0s: 1 bar(s)
+    bar0 h=32px hs=1.927 raw='almple ee a a lis\n' valid=True -> kill/pov_killer_match
+  fn3_s+3 t=100.0s: 1 bar(s)
+    bar0 h=32px hs=1.676 raw='as\n' valid=False -> skip/not_pov
+  >> erster Feed in ROI: t=98.0s (GT+1.0s)

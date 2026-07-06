@@ -1,5 +1,5 @@
 """
-CS2 kill-feed detection: two-pass pipeline (coarse color scan → fine OCR anchor).
+CS2 kill-feed detection: highlight-event scan (red frame) → OCR → POV filter.
 """
 from __future__ import annotations
 
@@ -62,14 +62,19 @@ class KillFeedConfig:
     roi_w: float = 0.175
     roi_h: float = 0.15
 
-    coarse_sample_sec: float = 3.0
+    coarse_sample_sec: float = 2.5
+    # Denser pass-1 sampling right after spawn (weak OCR / feed lag in first ~90s).
+    early_coarse_sample_sec: float = 1.5
+    early_coarse_window_sec: float = 90.0
     # Spawn/warmup filter — owned here only (Node killDetect.js must not duplicate).
     spawn_cutoff_sec: float = 32.0
 
     # Finer backward steps improve kill-anchor timing for montage cuts (was 0.5s).
     fine_step_sec: float = 0.33
-    fine_max_back_sec: float = 12.0
-    fine_miss_budget: int = 2
+    fine_max_back_sec: float = 15.0
+    # Kill-feed lines often appear 1–4s after a coarse sample; scan forward before giving up.
+    fine_forward_sec: float = 5.0
+    fine_miss_budget: int = 5
 
     red_h1_low: int = 0
     red_h1_high: int = 10
@@ -79,15 +84,42 @@ class KillFeedConfig:
     red_v_min: int = 70
 
     min_entry_width: int = 40
-    min_entry_height: int = 8
-    # Slightly lower for compressed YouTube/H.264 footage (was 0.035 / 0.028).
-    min_border_red_ratio: float = 0.030
-    min_border_score: float = 0.024
+    min_entry_height: int = 14
+    # Full kill-feed row height for OCR (dark-bar split alone clips text).
+    kill_bar_min_height: int = 22
+    kill_bar_pad_y: int = 4
+    kill_bar_max_height: int = 32
+    # Slightly lower for compressed YouTube/H.264 footage (was 0.035 / 0.028 / 0.030 / 0.024).
+    min_border_red_ratio: float = 0.026
+    min_border_score: float = 0.020
+    # CS2 highlight frame: red on all four edges of the kill line (not name-color bleed).
+    min_highlight_edge_red: float = 0.022
+    # Event-driven highlight scan (replaces coarse+fine OCR walk).
+    highlight_scan_idle_sec: float = 2.0
+    highlight_scan_hunt_sec: float = 0.45
+    highlight_scan_lock_sec: float = 0.25
+    min_highlight_event_score: float = 0.32
+    highlight_event_dedupe_sec: float = 4.5
+    highlight_weak_signal_score: float = 0.18
+    min_highlight_frame_edge: float = 0.004
+    # CS2 kill-feed row stays visible ~8–12s; same names = same kill.
+    kill_feed_persist_sec: float = 10.0
 
     fuzzy_match_threshold: float = 0.85
-    pov_cluster_threshold: float = 0.62
-    pov_match_threshold: float = 0.62
+    # Registry dedup window — same as killDetect.js sameKillWindowSec (HUD line ~6s on screen).
+    dedup_time_window_sec: float = 7.0
+    pov_cluster_threshold: float = 0.55
+    pov_match_threshold: float = 0.58
     pov_coverage_min: float = 0.40
+    # Collapse duplicate anchors from multiple coarse seeds on one engagement.
+    kill_dedupe_gap_sec: float = 4.0
+    # Kill-feed appears after the frag; shift anchors earlier for cut alignment.
+    kill_feed_lag_sec: float = 2.25
+    # Extra lag scale when OCR seed was found forward of the coarse sample (feed delay).
+    forward_lag_scale: float = 0.48
+    forward_lag_cap_sec: float = 2.5
+    # Merge duplicate output anchors from multiple coarse seeds on one engagement.
+    output_dedupe_gap_sec: float = 2.5
 
     merge_gap_sec: float = 5.0
     lead_sec: float = 4.0
@@ -117,6 +149,11 @@ class PipelineStats:
     clips_produced: int = 0
     pov_fallback_mode: bool = False
     pov_cluster_coverage: float = 0.0
+    highlight_events: int = 0
+    highlight_frames_scanned: int = 0
+    feed_persist_skipped: int = 0
+    highlight_transition_skipped: int = 0
+    registry_dedup_window_rejected: int = 0
 
 
 @dataclass
@@ -293,11 +330,197 @@ def is_full_fingerprint(fp: dict[str, Any]) -> bool:
     return not is_partial_fingerprint(fp) and is_valid_kill_fingerprint(fp)
 
 
+def is_garbage_ocr_name(name: str) -> bool:
+    """Reject OCR noise that should not drive POV clustering or matching."""
+    n = normalize_name(name)
+    if len(n) < 3:
+        return True
+    if len(n) > 18:
+        return True
+    if re.search(r"(.)\1{3,}", n):
+        return True
+    if len(n) >= 7 and len(set(n)) / len(n) < 0.38:
+        return True
+    alnum = sum(ch.isalnum() for ch in n)
+    if len(n) >= 5 and alnum / len(n) < 0.72:
+        return True
+    return False
+
+
+def entry_has_pov_name(
+    entry: dict[str, Any],
+    fp: dict[str, Any],
+    pov_rep: str,
+    pov_cluster: dict[str, Any] | None,
+    cfg: KillFeedConfig,
+) -> bool:
+    return any(
+        name_matches_pov(name, pov_rep, pov_cluster, cfg)
+        for name in entry_names(entry, fp)
+    )
+
+
+def merge_meta_clusters(
+    clusters: list[dict[str, Any]], threshold: float
+) -> list[dict[str, Any]]:
+    """Merge OCR-variant name clusters (simple / sianple / sinpleofea)."""
+    merged: list[dict[str, Any]] = []
+    for cluster in sorted(clusters, key=lambda c: -c["count"]):
+        rep = cluster["representative"]
+        if is_garbage_ocr_name(rep):
+            continue
+        placed = False
+        for existing in merged:
+            if fuzzy_ratio(rep, existing["representative"]) >= threshold:
+                existing["members"].extend(cluster["members"])
+                existing["count"] += cluster["count"]
+                members = existing["members"]
+                existing["representative"] = max(
+                    set(members), key=lambda m: (members.count(m), len(m))
+                )
+                placed = True
+                break
+        if not placed:
+            merged.append(
+                {
+                    "representative": rep,
+                    "members": list(cluster["members"]),
+                    "count": cluster["count"],
+                }
+            )
+    return sorted(merged, key=lambda c: (-c["count"], -len(c["representative"])))
+
+
+def collapse_kill_events(
+    kills: list[dict[str, Any]], gap_sec: float, pov_rep: str = ""
+) -> list[dict[str, Any]]:
+    if not kills:
+        return kills
+    ordered = sorted(kills, key=lambda k: k["anchor_s"])
+    out: list[dict[str, Any]] = [ordered[0]]
+    for kill in ordered[1:]:
+        prev = out[-1]
+        gap = kill["anchor_s"] - prev["anchor_s"]
+        if gap > gap_sec:
+            out.append(kill)
+            continue
+        prev_victim = normalize_name(prev.get("victim", ""))
+        kill_victim = normalize_name(kill.get("victim", ""))
+        if prev_victim and kill_victim and prev_victim != kill_victim:
+            if _partial_ocr_same_engagement(prev, kill, pov_rep):
+                if kill.get("confidence", 0) >= prev.get("confidence", 0):
+                    out[-1] = kill
+                continue
+            out.append(kill)
+            continue
+        if kill.get("confidence", 0) >= prev.get("confidence", 0):
+            out[-1] = kill
+    return out
+
+
+def _partial_ocr_same_engagement(
+    prev: dict[str, Any], kill: dict[str, Any], pov_rep: str
+) -> bool:
+    """Noisy OCR on one feed line — killer variants with garbage/different victims."""
+    gap = kill["anchor_s"] - prev["anchor_s"]
+    if gap > 4.0:
+        return False
+    pk = prev.get("killer", "")
+    kk = kill.get("killer", "")
+    if pov_rep and is_likely_pov_ocr_spelling(pk, pov_rep) and is_likely_pov_ocr_spelling(
+        kk, pov_rep
+    ):
+        return True
+    prev_partial = "partial" in str(prev.get("pov_reason", ""))
+    kill_partial = "partial" in str(kill.get("pov_reason", ""))
+    if prev_partial and kill_partial:
+        return True
+    pv = normalize_name(prev.get("victim", ""))
+    kv = normalize_name(kill.get("victim", ""))
+    if (prev_partial or kill_partial) and (
+        is_garbage_ocr_name(pv) or len(pv) <= 4
+    ) and (is_garbage_ocr_name(kv) or len(kv) <= 4):
+        return True
+    return False
+
+
+def dedupe_output_kills(
+    kills: list[dict[str, Any]], gap_sec: float, pov_rep: str = ""
+) -> list[dict[str, Any]]:
+    """Drop duplicate anchors from multiple coarse seeds (same engagement, OCR variants)."""
+    if not kills:
+        return kills
+    ordered = sorted(kills, key=lambda k: k["anchor_s"])
+    out: list[dict[str, Any]] = [ordered[0]]
+    for kill in ordered[1:]:
+        merged = False
+        for i, prev in enumerate(out):
+            gap = kill["anchor_s"] - prev["anchor_s"]
+            pov_merge = pov_rep and gap <= 4.0 and is_likely_pov_ocr_spelling(
+                prev.get("killer", ""), pov_rep
+            ) and is_likely_pov_ocr_spelling(kill.get("killer", ""), pov_rep)
+            partial_merge = _partial_ocr_same_engagement(prev, kill, pov_rep)
+            if gap > gap_sec and not pov_merge and not partial_merge:
+                continue
+            pk = normalize_name(prev.get("killer", ""))
+            kk = normalize_name(kill.get("killer", ""))
+            pv = normalize_name(prev.get("victim", ""))
+            kv = normalize_name(kill.get("victim", ""))
+            same_k = len(pk) >= 3 and len(kk) >= 3 and fuzzy_ratio(pk, kk) >= 0.72
+            same_v = len(pv) >= 3 and len(kv) >= 3 and fuzzy_ratio(pv, kv) >= 0.72
+            if pov_merge or partial_merge:
+                same_k = True
+            if same_k or same_v:
+                if kill.get("confidence", 0) >= prev.get("confidence", 0):
+                    out[i] = kill
+                merged = True
+                break
+        if not merged:
+            out.append(kill)
+    return dedupe_exact_anchors(out)
+
+
+def dedupe_exact_anchors(
+    kills: list[dict[str, Any]], eps: float = 0.5
+) -> list[dict[str, Any]]:
+    if not kills:
+        return kills
+    ordered = sorted(kills, key=lambda k: k["anchor_s"])
+    out: list[dict[str, Any]] = [ordered[0]]
+    for kill in ordered[1:]:
+        if abs(kill["anchor_s"] - out[-1]["anchor_s"]) <= eps:
+            if kill.get("confidence", 0) >= out[-1].get("confidence", 0):
+                out[-1] = kill
+        else:
+            out.append(kill)
+    return out
+
+
+def kill_output_anchor(entry: dict[str, Any], cfg: KillFeedConfig) -> float:
+    """Cut anchor = red-highlight bar time minus feed lag."""
+    base = float(entry.get("bar_detection_s") or entry["anchor_s"])
+    lag = cfg.kill_feed_lag_sec
+    fp = entry.get("fingerprint") or {}
+    if fp.get("highlight_only") or entry.get("highlight_only"):
+        return round(max(cfg.spawn_cutoff_sec, base - lag), 2)
+    coarse = entry.get("coarse_origin_s")
+    forward = float(entry.get("forward_lag_sec") or 0.0)
+    if forward > cfg.fine_step_sec:
+        lag += min(cfg.forward_lag_cap_sec, forward * cfg.forward_lag_scale)
+    elif coarse is not None:
+        delta = base - float(coarse)
+        if delta > cfg.fine_step_sec:
+            lag += min(cfg.forward_lag_cap_sec, delta * cfg.forward_lag_scale)
+        elif delta < -cfg.fine_step_sec:
+            lag = max(2.0, lag - min(0.5, abs(delta) * 0.125))
+    return round(max(cfg.spawn_cutoff_sec, base - lag), 2)
+
+
 def cluster_names(names: list[str], threshold: float = 0.75) -> list[dict[str, Any]]:
     clusters: list[dict[str, Any]] = []
     for raw in names:
         norm = normalize_name(raw)
-        if len(norm) < 3:
+        if len(norm) < 3 or is_garbage_ocr_name(norm):
             continue
         placed = False
         for cluster in clusters:
@@ -329,58 +552,34 @@ def name_matches_pov(
     pov_cluster: dict[str, Any] | None,
     cfg: KillFeedConfig,
 ) -> bool:
-    """Name ≈ POV player from OCR cluster (fuzzy, aliases, shared stem)."""
+    """Name ≈ POV player — fuzzy + cluster members only (no loose suffix rules)."""
     k = normalize_name(name)
-    if len(k) < 3 or not pov_rep:
-        return False
-    threshold = cfg.pov_match_threshold
-    
-    # Direct fuzzy match
-    if name_matches_cluster(name, pov_rep, threshold):
-        return True
-    
-    # Lower threshold for very similar names (typos, OCR errors)
     pn = normalize_name(pov_rep)
-    ratio = fuzzy_ratio(k, pn)
-    if ratio >= 0.55:  # Lower threshold for OCR typo tolerance
+    if len(k) < 3 or not pn or is_garbage_ocr_name(k):
+        return False
+
+    threshold = cfg.pov_match_threshold
+    if fuzzy_ratio(k, pn) >= threshold:
         return True
-    
-    # Substring matching (e.g., "simple" in "simpsa", or vice versa)
-    if len(k) >= 4 and len(pn) >= 4:
-        # Check if one is substring of the other (for OCR partial reads)
-        if k in pn or pn in k:
-            return True
-        # Check common prefix (first 4+ chars match)
-        min_len = min(len(k), len(pn))
-        prefix_len = max(4, min_len - 2)
-        if k[:prefix_len] == pn[:prefix_len]:
-            return True
-    
-    # Stem matching (last N chars for suffix similarity)
-    for stem_len in (7, 6, 5, 4):
-        if len(pn) >= stem_len and len(k) >= stem_len - 1:
-            stem = pn[-stem_len:]
-            if stem in k or k in pn:
-                return True
-    
-    # Suffix matching (e.g., "simple" ends with same as "simpsa")
-    if len(k) >= 3 and len(pn) >= 3:
-        if k[-3:] == pn[-3:] or k[-4:] == pn[-4:]:
-            return True
-    
-    # Cluster member matching with lower threshold
+
+    # OCR typos on the POV rep (e.g. s1mple → simple) — require reasonable length.
+    if len(k) >= 4 and len(pn) >= 4 and fuzzy_ratio(k, pn) >= 0.55:
+        return True
+
+    # Shared prefix for longer reads (simp… / s1mp…)
+    if len(k) >= 6 and len(pn) >= 6 and k[:4] == pn[:4]:
+        return True
+
     if pov_cluster:
         for member in pov_cluster.get("members", []):
             member_norm = normalize_name(member)
-            if len(member_norm) < 3:
+            if len(member_norm) < 3 or is_garbage_ocr_name(member_norm):
                 continue
-            # Higher threshold for cluster members
-            if fuzzy_ratio(k, member_norm) >= max(0.55, threshold - 0.1):
+            if member_norm == k:
                 return True
-            # Substring match against cluster members
-            if k in member_norm or member_norm in k:
+            if fuzzy_ratio(k, member_norm) >= max(0.55, threshold - 0.05):
                 return True
-    
+
     return False
 
 
@@ -456,6 +655,100 @@ def crop_roi(frame: np.ndarray, cfg: KillFeedConfig) -> np.ndarray | None:
     return frame[y1:y2, x1:x2]
 
 
+def _merge_nearby_bands(
+    bands: list[tuple[int, int]], gap: int = 3
+) -> list[tuple[int, int]]:
+    if not bands:
+        return bands
+    merged: list[tuple[int, int]] = [bands[0]]
+    for y0, y1 in bands[1:]:
+        py0, py1 = merged[-1]
+        if y0 - py1 <= gap:
+            merged[-1] = (py0, y1)
+        else:
+            merged.append((y0, y1))
+    return merged
+
+
+def _expand_kill_bar_bounds(
+    patch: np.ndarray, y0: int, y1: int, cfg: KillFeedConfig
+) -> tuple[int, int]:
+    """Pad a red/dark seed band to a full kill-feed row without bleeding into neighbors."""
+    h = patch.shape[0]
+    pad = cfg.kill_bar_pad_y
+    y0e = max(0, y0 - pad)
+    y1e = min(h, y1 + pad)
+    min_h = cfg.kill_bar_min_height
+    if y1e - y0e < min_h:
+        center = (y0 + y1) // 2
+        half = (min_h + 1) // 2
+        y0e = max(0, center - half)
+        y1e = min(h, center + half)
+        if y1e - y0e < min_h:
+            y1e = min(h, y0e + min_h)
+    return y0e, y1e
+
+
+def _split_feed_lines(patch: np.ndarray) -> list[tuple[int, int]]:
+    """Initial row seeds from dark kill-feed backgrounds (expanded later per band)."""
+    return _split_dark_bars(patch)
+
+
+def _split_oversized_band(
+    red: np.ndarray, y0: int, y1: int, max_h: int = 34
+) -> list[tuple[int, int]]:
+    if y1 - y0 <= max_h:
+        return [(y0, y1)]
+    band = red[y0:y1, :]
+    row_red = np.mean(band > 0, axis=1)
+    if len(row_red) < 10:
+        return [(y0, y1)]
+    inner = row_red[4:-4]
+    gap_rel = int(np.argmin(inner))
+    gap = gap_rel + 4
+    if inner[gap_rel] > 0.01:
+        return [(y0, y1)]
+    top = (y0, y0 + gap)
+    bot = (y0 + gap, y1)
+    if top[1] - top[0] < 6 or bot[1] - bot[0] < 6:
+        return [(y0, y1)]
+    return [top, bot]
+
+
+def _bands_from_red_rows(red: np.ndarray, min_h: int = 6) -> list[tuple[int, int]]:
+    """One band per red-bordered kill-feed rectangle."""
+    if red is None or red.size == 0:
+        return []
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 1))
+    closed = cv2.morphologyEx(red, cv2.MORPH_CLOSE, kernel)
+    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    bands: list[tuple[int, int]] = []
+    for contour in contours:
+        _x, y, w, h = cv2.boundingRect(contour)
+        if h < min_h or w < 30:
+            continue
+        bands.append((y, y + h))
+    if bands:
+        split: list[tuple[int, int]] = []
+        for y0, y1 in sorted(bands):
+            split.extend(_split_oversized_band(red, y0, y1))
+        return split
+
+    row_red = np.mean(red > 0, axis=1)
+    active = row_red > 0.012
+    start = None
+    for i, on in enumerate(active):
+        if on and start is None:
+            start = i
+        elif not on and start is not None:
+            if i - start >= min_h:
+                bands.append((start, i))
+            start = None
+    if start is not None and red.shape[0] - start >= min_h:
+        bands.append((start, red.shape[0]))
+    return _merge_nearby_bands(bands, gap=2)
+
+
 def _split_dark_bars(patch: np.ndarray) -> list[tuple[int, int]]:
     gray = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
     row_mean = np.mean(gray, axis=1)
@@ -467,14 +760,14 @@ def _split_dark_bars(patch: np.ndarray) -> list[tuple[int, int]]:
         if on and start is None:
             start = i
         elif not on and start is not None:
-            if i - start >= 5:
+            if i - start >= 8:
                 bands.append((start, i))
             start = None
-    if start is not None and patch.shape[0] - start >= 5:
+    if start is not None and patch.shape[0] - start >= 8:
         bands.append((start, patch.shape[0]))
     if not bands:
         return _split_feed_bands_fallback(patch)
-    return bands
+    return _merge_nearby_bands(bands, gap=3)
 
 
 def _split_feed_bands_fallback(patch: np.ndarray) -> list[tuple[int, int]]:
@@ -513,40 +806,403 @@ def _border_score(band_bgr: np.ndarray, red_mask: np.ndarray) -> float:
     return max(0.0, border_red - inner_red * 0.45)
 
 
-def detect_red_bordered_entries(patch_bgr: np.ndarray, cfg: KillFeedConfig) -> list[dict[str, Any]]:
+def _red_highlight_frame_score(red_band: np.ndarray) -> float:
+    """Top+bottom red edges = CS2 highlight frame (stronger than name-color bleed)."""
+    h, w = red_band.shape[:2]
+    if h < 8 or w < 20:
+        return 0.0
+    t = max(1, min(2, h // 5))
+    top = float(np.mean(red_band[:t, :] > 0))
+    bot = float(np.mean(red_band[-t:, :] > 0))
+    if top < 0.015 or bot < 0.015:
+        return min(top, bot)
+    return (top + bot) / 2.0
+
+
+def _kill_feed_row_sanity(band_bgr: np.ndarray, frame_edge: float = 0.0) -> bool:
+    """Reject uniform wall/sky strips; keep dark or text-contrast feed rows."""
+    if band_bgr is None or band_bgr.size == 0:
+        return False
+    gray = cv2.cvtColor(band_bgr, cv2.COLOR_BGR2GRAY)
+    mean = float(np.mean(gray))
+    std = float(np.std(gray))
+    bright_frac = float(np.mean(gray > 165))
+    # Text + icons on feed → high variance.
+    if std >= 20.0 and bright_frac >= 0.03:
+        return True
+    # Clear red highlight frame (true CS2 new-kill row).
+    if frame_edge >= 0.06:
+        return True
+    # Uniform mid/dark band without text (wood wall, orange glow) — e.g. fn2 @58s.
+    if mean < 105.0 and std < 18.0:
+        return False
+    if bright_frac < 0.025 and frame_edge < 0.055:
+        return False
+    # Bright uniform strip without contrast (sky/hotspot).
+    if mean > 145.0 and std < 18.0:
+        return False
+    return mean < 140.0
+
+
+def _build_highlight_entry(
+    patch_bgr: np.ndarray,
+    y0: int,
+    y1: int,
+    red: np.ndarray,
+    gray: np.ndarray,
+    cfg: KillFeedConfig,
+) -> dict[str, Any] | None:
+    """Score one kill-feed band for CS2 red highlight frame (top+bottom edges)."""
+    band = patch_bgr[y0:y1, :]
+    red_band = red[y0:y1, :]
+    bh, bw = band.shape[:2]
+    if bw < cfg.min_entry_width or bh < cfg.min_entry_height:
+        return None
+    if bh > cfg.kill_bar_max_height + 4:
+        center = (y0 + y1) // 2
+        half = cfg.kill_bar_max_height // 2
+        y0 = max(0, center - half)
+        y1 = min(patch_bgr.shape[0], center + half)
+        band = patch_bgr[y0:y1, :]
+        red_band = red[y0:y1, :]
+        bh = band.shape[0]
+
+    t = max(1, min(2, bh // 5))
+    top_red = float(np.mean(red_band[:t, :] > 0))
+    bot_red = float(np.mean(red_band[-t:, :] > 0))
+    mid = red_band[t : max(t, bh - t), :]
+    inner_red = float(np.mean(mid > 0)) if mid.size else 1.0
+    center_gray = float(np.mean(gray[y0:y1, :]))
+    darkness = max(0.0, (148.0 - center_gray) / 88.0)
+
+    frame_edge = (
+        min(top_red, bot_red)
+        if top_red >= 0.005 and bot_red >= 0.005
+        else 0.0
+    )
+    border_score = _border_score(band, red_band)
+    red_ratio = float(np.mean(red_band > 0))
+
+    if frame_edge < cfg.min_highlight_frame_edge and border_score < 0.015:
+        if red_ratio < 0.09:
+            return None
+
+    highlight_score = (
+        frame_edge * 4.0
+        + border_score * 2.5
+        + max(0.0, (top_red + bot_red) / 2.0 - inner_red * 0.55) * 2.0
+        + min(red_ratio, 0.22) * 1.2
+        + darkness * 0.45
+    )
+
+    passes = highlight_score >= cfg.min_highlight_event_score or _bar_candidate_passes(
+        border_score, frame_edge, red_ratio, cfg
+    )
+    if not passes:
+        return None
+    if darkness < 0.03 and red_ratio < 0.035 and frame_edge < 0.008:
+        return None
+    if not _kill_feed_row_sanity(band, frame_edge):
+        return None
+
+    return {
+        "bbox": (0, y0, bw, y1),
+        "crop": band,
+        "border_score": border_score,
+        "border_red": red_ratio,
+        "highlight_score": highlight_score,
+        "frame_edge": frame_edge,
+        "red_border": True,
+        "rect": (y0, y1),
+    }
+
+
+def detect_highlight_bar(
+    patch_bgr: np.ndarray, cfg: KillFeedConfig
+) -> list[dict[str, Any]]:
+    """Best single red-highlight kill-feed row in ROI (one kill line)."""
     if patch_bgr is None or patch_bgr.size == 0:
         return []
 
     hsv = cv2.cvtColor(patch_bgr, cv2.COLOR_BGR2HSV)
     red = _red_mask(hsv, cfg)
-    entries: list[dict[str, Any]] = []
+    gray = cv2.cvtColor(patch_bgr, cv2.COLOR_BGR2GRAY)
 
-    for y0, y1 in _split_dark_bars(patch_bgr):
-        band = patch_bgr[y0:y1, :]
-        red_band = red[y0:y1, :]
-        bw = band.shape[1]
-        bh = band.shape[0]
-        if bw < cfg.min_entry_width or bh < cfg.min_entry_height:
+    seeds: list[tuple[int, int]] = list(_split_feed_lines(patch_bgr))
+    seeds.extend(_bands_from_red_rows(red, min_h=8))
+    if not seeds:
+        return []
+
+    merged: list[tuple[int, int]] = []
+    for y0, y1 in sorted(seeds):
+        merged.append((y0, y1))
+    seeds = _merge_nearby_bands(merged, gap=4)
+
+    best: dict[str, Any] | None = None
+    best_score = -1.0
+    for y0, y1 in seeds:
+        y0e, y1e = _expand_kill_bar_bounds(patch_bgr, y0, y1, cfg)
+        for dy in (-3, -1, 0, 1, 3):
+            ya = max(0, y0e + dy)
+            yb = min(patch_bgr.shape[0], y1e + dy)
+            if yb - ya < cfg.kill_bar_min_height:
+                continue
+            ent = _build_highlight_entry(patch_bgr, ya, yb, red, gray, cfg)
+            if ent is None:
+                continue
+            sc = float(ent["highlight_score"])
+            if sc > best_score:
+                best_score = sc
+                best = ent
+
+    return [best] if best else []
+
+
+def _rect_matches_recent(
+    y0: int,
+    y1: int,
+    t: float,
+    recent: list[tuple[float, int, int]],
+    cfg: KillFeedConfig,
+) -> bool:
+    cy = (y0 + y1) / 2.0
+    for pt, py0, py1 in recent:
+        if t - pt > cfg.highlight_event_dedupe_sec:
             continue
-        score = _border_score(band, red_band)
-        border_red = float(np.mean(red_band > 0))
-        has_red = score >= cfg.min_border_score or border_red >= cfg.min_border_red_ratio
-        if not has_red:
-            continue
-        pad = 2
-        y0p = max(0, y0 - pad)
-        y1p = min(patch_bgr.shape[0], y1 + pad)
-        crop = patch_bgr[y0p:y1p, :]
-        entries.append(
-            {
-                "bbox": (0, y0p, bw, y1p),
-                "crop": crop,
-                "border_score": score,
-                "border_red": border_red,
-                "red_border": True,
-            }
+        pcy = (py0 + py1) / 2.0
+        if abs(pcy - cy) <= 14 and abs((py1 - py0) - (y1 - y0)) <= 10:
+            return True
+    return False
+
+
+@dataclass
+class _PersistedFeedHit:
+    t: float
+    keys: list[str]
+    fp: dict[str, Any]
+    y_center: float
+
+
+def _feed_identity_keys(fp: dict[str, Any]) -> list[str]:
+    keys: list[str] = []
+    fk = fingerprint_key(fp)
+    if fk:
+        keys.append(fk)
+    k = normalize_name(fp.get("killer", ""))
+    v = normalize_name(fp.get("victim", ""))
+    a = normalize_name(fp.get("assist", ""))
+    if k and len(k) >= 3:
+        keys.append(f"k|{k}")
+    if v and len(v) >= 3:
+        keys.append(f"v|{v}")
+    if k and v:
+        keys.append(f"{k}|{v}")
+    if a and len(a) >= 3:
+        keys.append(f"a|{a}")
+    return keys
+
+
+class FeedPersistTracker:
+    """Suppress re-counting the same feed line while it scrolls (~10s on screen)."""
+
+    def __init__(self, cfg: KillFeedConfig) -> None:
+        self.cfg = cfg
+        self.hits: list[_PersistedFeedHit] = []
+
+    def prune(self, t: float) -> None:
+        window = self.cfg.kill_feed_persist_sec
+        self.hits = [h for h in self.hits if t - h.t <= window]
+
+    def is_duplicate(self, t: float, fp: dict[str, Any], y0: int, y1: int) -> tuple[bool, str]:
+        self.prune(t)
+        keys = _feed_identity_keys(fp)
+        yc = (y0 + y1) / 2.0
+        for h in self.hits:
+            age = t - h.t
+            if age > self.cfg.kill_feed_persist_sec:
+                continue
+            if keys and (h.keys or h.fp):
+                for k in keys:
+                    if k in h.keys:
+                        return True, "same_feed_names"
+                if fingerprint_match(fp, h.fp, self.cfg.fuzzy_match_threshold):
+                    return True, "fuzzy_feed_fp"
+            # Unreadable OCR: only suppress rapid re-fire on the same row (not 10s band).
+            if not keys and not h.keys:
+                if age < 2.5 and abs(yc - h.y_center) < 14:
+                    return True, "same_feed_band"
+        return False, ""
+
+    def record(self, t: float, fp: dict[str, Any], y0: int, y1: int) -> None:
+        self.prune(t)
+        self.hits.append(
+            _PersistedFeedHit(
+                t=t,
+                keys=_feed_identity_keys(fp),
+                fp=fp,
+                y_center=(y0 + y1) / 2.0,
+            )
         )
-    return entries
+
+
+def _highlight_just_appeared(
+    y0: int,
+    y1: int,
+    frame_edge: float,
+    patch_h: int,
+    band_edges: dict[int, tuple[float, float]],
+    cfg: KillFeedConfig,
+) -> bool:
+    """True when the red frame is new — not a gray row still sitting in the feed."""
+    band = y0 // 10
+    _prev_t, prev_edge = band_edges.get(band, (0.0, 0.0))
+    edge_now = frame_edge >= cfg.min_highlight_frame_edge
+    edge_rising = edge_now and prev_edge < cfg.min_highlight_frame_edge * 0.55
+    new_band = band not in band_edges and edge_now
+    # CS2 pushes new kills to the top of the ROI (low y).
+    top_slot = y0 < patch_h * 0.4 and edge_now
+    new_at_top = top_slot and (not band_edges or y0 < min(b * 10 for b in band_edges) - 8)
+    return edge_rising or new_band or new_at_top
+
+
+def _patch_has_weak_highlight(patch_bgr: np.ndarray, cfg: KillFeedConfig) -> bool:
+    for ent in detect_highlight_bar(patch_bgr, cfg):
+        if float(ent.get("highlight_score", 0)) >= cfg.highlight_weak_signal_score:
+            return True
+    return False
+
+
+def highlight_event_scan(
+    duration: float,
+    cfg: KillFeedConfig,
+    reader: FrameReader,
+    stats: PipelineStats,
+    debug: OcrDebugLogger,
+) -> list[dict[str, Any]]:
+    """Adaptive scan: new red-highlight bar = one kill-feed event (no OCR gate)."""
+    events: list[dict[str, Any]] = []
+    recent_rects: list[tuple[float, int, int]] = []
+    band_edges: dict[int, tuple[float, float]] = {}
+    t = cfg.spawn_cutoff_sec
+    mode = "idle"
+    lock_until = 0.0
+    t0 = time.monotonic()
+
+    _kf_log(
+        f"highlight scan start: idle={cfg.highlight_scan_idle_sec}s "
+        f"hunt={cfg.highlight_scan_hunt_sec}s lock={cfg.highlight_scan_lock_sec}s"
+    )
+
+    while t < duration:
+        if mode == "idle":
+            step = cfg.highlight_scan_idle_sec
+        elif mode == "hunt":
+            step = cfg.highlight_scan_hunt_sec
+        else:
+            step = cfg.highlight_scan_lock_sec
+
+        stats.highlight_frames_scanned += 1
+        stats.frames_sampled_pass1 += 1
+        if stats.highlight_frames_scanned % 80 == 0:
+            _kf_log(
+                f"highlight progress: t={t:.0f}s events={len(events)} "
+                f"mode={mode} elapsed={time.monotonic() - t0:.0f}s"
+            )
+
+        weak = False
+        frame = get_frame(reader, t)
+        if frame is not None:
+            patch = crop_roi(frame, cfg)
+            if patch is not None:
+                bars = detect_highlight_bar(patch, cfg)
+                weak = _patch_has_weak_highlight(patch, cfg)
+
+                if bars:
+                    ent = bars[0]
+                    y0, y1 = ent["rect"]
+                    hs = float(ent["highlight_score"])
+                    fe = float(ent.get("frame_edge", 0))
+                    ph = patch.shape[0]
+                    is_new = (
+                        hs >= cfg.min_highlight_event_score
+                        and fe >= cfg.min_highlight_frame_edge
+                        and not _rect_matches_recent(y0, y1, t, recent_rects, cfg)
+                    )
+                    band_edges[y0 // 10] = (t, fe)
+                    band_edges = {
+                        b: (bt, be)
+                        for b, (bt, be) in band_edges.items()
+                        if t - bt <= cfg.kill_feed_persist_sec
+                    }
+                    if is_new:
+                        ev = {
+                            "t_bar": round(t, 2),
+                            "crop": ent["crop"],
+                            "highlight_score": hs,
+                            "frame_edge": fe,
+                            "rect": (y0, y1),
+                            "border_score": ent.get("border_score", 0.0),
+                        }
+                        events.append(ev)
+                        stats.highlight_events += 1
+                        recent_rects.append((t, y0, y1))
+                        recent_rects = [
+                            r
+                            for r in recent_rects
+                            if t - r[0] <= cfg.highlight_event_dedupe_sec + 2.0
+                        ]
+                        lock_until = t + 3.5
+                        mode = "lock"
+                        debug.log(
+                            t,
+                            ent["crop"],
+                            "",
+                            {},
+                            True,
+                            "highlight_event",
+                            f"score={hs:.3f}",
+                        )
+                    elif weak or hs >= cfg.highlight_weak_signal_score:
+                        mode = "hunt"
+                        lock_until = max(lock_until, t + 2.0)
+                elif weak:
+                    mode = "hunt"
+                    lock_until = max(lock_until, t + 2.0)
+
+        if mode == "lock" and t >= lock_until:
+            mode = "hunt"
+        elif mode == "hunt" and t >= lock_until and not weak:
+            mode = "idle"
+
+        t += step
+
+    stats.coarse_hits = len(events)
+    _kf_log(
+        f"highlight scan done: {stats.highlight_frames_scanned} frames, "
+        f"{len(events)} events in {time.monotonic() - t0:.1f}s"
+    )
+    return events
+
+
+def _bar_candidate_passes(
+    border_score: float, highlight: float, red_ratio: float, cfg: KillFeedConfig
+) -> bool:
+    return (
+        border_score >= cfg.min_border_score
+        or highlight >= cfg.min_highlight_edge_red
+        or red_ratio >= cfg.min_border_red_ratio
+    )
+
+
+def detect_red_bordered_entries(patch_bgr: np.ndarray, cfg: KillFeedConfig) -> list[dict[str, Any]]:
+    """Public API for diagnostics — delegates to highlight bar detector."""
+    return detect_highlight_bar(patch_bgr, cfg)
+
+
+def _has_red_highlight_in_roi(patch_bgr: np.ndarray, cfg: KillFeedConfig) -> bool:
+    if patch_bgr is None or patch_bgr.size == 0:
+        return False
+    return bool(detect_highlight_bar(patch_bgr, cfg))
 
 
 def _ocr_score_text(text: str, data: dict[str, Any]) -> float:
@@ -632,7 +1288,7 @@ def ocr_kill_bar(bar_bgr: np.ndarray, cfg: KillFeedConfig) -> tuple[str, float]:
 
 def parse_kill_fingerprint(ocr_text: str) -> dict[str, Any]:
     names = [normalize_name(n) for n in _NAME_RE.findall(ocr_text or "")]
-    names = [n for n in names if len(n) >= 3]
+    names = [n for n in names if len(n) >= 3 and not is_garbage_ocr_name(n)]
     if not names:
         return {"killer": "", "assist": "", "victim": "", "partial": False, "raw": ocr_text or ""}
     if len(names) == 1:
@@ -719,9 +1375,29 @@ def fingerprint_match(a: dict[str, Any], b: dict[str, Any], threshold: float) ->
 
 
 def find_registry_match(
-    fp: dict[str, Any], registry: list[dict[str, Any]], threshold: float
+    fp: dict[str, Any],
+    registry: list[dict[str, Any]],
+    threshold: float,
+    anchor: float,
+    window_sec: float,
+    *,
+    debug: bool = False,
+    stats: PipelineStats | None = None,
 ) -> dict[str, Any] | None:
     for entry in registry:
+        entry_anchor = float(entry["anchor_s"])
+        if abs(entry_anchor - anchor) > window_sec:
+            if fingerprint_match(fp, entry["fingerprint"], threshold):
+                if stats is not None:
+                    stats.registry_dedup_window_rejected += 1
+                if debug:
+                    _kf_log(
+                        f"registry dedup window reject: candidate={anchor:.2f}s "
+                        f"matched entry@{entry_anchor:.2f}s "
+                        f"(delta={abs(entry_anchor - anchor):.1f}s > {window_sec}s) "
+                        f"fp={fingerprint_key(fp)!r}"
+                    )
+            continue
         if fingerprint_match(fp, entry["fingerprint"], threshold):
             return entry
     return None
@@ -734,16 +1410,39 @@ def upsert_registry_entry(
     confidence: float,
     threshold: float,
     stats: PipelineStats,
+    forward_lag_sec: float = 0.0,
+    coarse_origin_s: float | None = None,
+    bar_detection_s: float | None = None,
+    highlight_score: float = 0.0,
+    highlight_only: bool = False,
+    frame_edge: float = 0.0,
+    dedup_window_sec: float = 7.0,
+    debug_dedup: bool = False,
 ) -> dict[str, Any]:
-    existing = find_registry_match(fp, registry, threshold)
+    bar_t = round(bar_detection_s if bar_detection_s is not None else anchor, 2)
+    existing = find_registry_match(
+        fp,
+        registry,
+        threshold,
+        anchor,
+        dedup_window_sec,
+        debug=debug_dedup,
+        stats=stats,
+    )
     if existing is None:
         entry = {
             "anchor_s": round(anchor, 2),
+            "bar_detection_s": bar_t,
             "killer": fp.get("killer", ""),
             "assist": fp.get("assist", ""),
             "victim": fp.get("victim", ""),
             "fingerprint": fp,
             "confidence": round(confidence, 3),
+            "forward_lag_sec": round(max(0.0, forward_lag_sec), 2),
+            "coarse_origin_s": round(coarse_origin_s, 2) if coarse_origin_s is not None else None,
+            "highlight_score": round(highlight_score, 3),
+            "highlight_only": highlight_only,
+            "frame_edge": round(frame_edge, 4),
         }
         registry.append(entry)
         return entry
@@ -756,8 +1455,19 @@ def upsert_registry_entry(
         existing["killer"] = fp.get("killer", "")
         existing["assist"] = fp.get("assist", "")
         existing["victim"] = fp.get("victim", "")
-    existing["anchor_s"] = round(min(existing["anchor_s"], anchor), 2)
+    prev_bar = float(existing.get("bar_detection_s") or existing["anchor_s"])
+    existing["bar_detection_s"] = round(min(prev_bar, bar_t), 2)
+    existing["anchor_s"] = existing["bar_detection_s"]
     existing["confidence"] = round(max(existing["confidence"], confidence), 3)
+    existing["forward_lag_sec"] = round(
+        max(float(existing.get("forward_lag_sec") or 0.0), forward_lag_sec), 2
+    )
+    if coarse_origin_s is not None:
+        prev = existing.get("coarse_origin_s")
+        if prev is None:
+            existing["coarse_origin_s"] = round(coarse_origin_s, 2)
+        else:
+            existing["coarse_origin_s"] = round(min(float(prev), coarse_origin_s), 2)
     return existing
 
 
@@ -934,6 +1644,7 @@ def _compute_fingerprints_at_time(
                 "border_score": entry["border_score"],
             }
         )
+        break  # one red-highlight bar = one kill detection per timestamp
     return results
 
 
@@ -954,6 +1665,13 @@ def fingerprints_at_time(
     return results
 
 
+def _coarse_step_at(t: float, cfg: KillFeedConfig) -> float:
+    early_end = cfg.spawn_cutoff_sec + cfg.early_coarse_window_sec
+    if t < early_end:
+        return cfg.early_coarse_sample_sec
+    return cfg.coarse_sample_sec
+
+
 def coarse_scan(
     duration: float,
     cfg: KillFeedConfig,
@@ -963,22 +1681,24 @@ def coarse_scan(
     # spawn_cutoff_sec: skip buy/spawn period (only enforced in Python).
     hits: list[float] = []
     t = cfg.spawn_cutoff_sec
-    expected = max(1, int((duration - t) / cfg.coarse_sample_sec))
-    _kf_log(f"pass1 coarse scan start: ~{expected} samples (step={cfg.coarse_sample_sec}s)")
+    _kf_log(
+        f"pass1 coarse scan start: step={cfg.coarse_sample_sec}s "
+        f"(early {cfg.early_coarse_sample_sec}s for {cfg.early_coarse_window_sec}s)"
+    )
     t0 = time.monotonic()
     while t < duration:
         stats.frames_sampled_pass1 += 1
         if stats.frames_sampled_pass1 % 50 == 0 or stats.frames_sampled_pass1 == 1:
             _kf_log(
-                f"pass1 progress: frame={stats.frames_sampled_pass1}/{expected} "
+                f"pass1 progress: frame={stats.frames_sampled_pass1} "
                 f"t={t:.0f}s hits={len(hits)} elapsed={time.monotonic() - t0:.0f}s"
             )
         frame = get_frame(reader, t)
         if frame is not None:
             patch = crop_roi(frame, cfg)
-            if patch is not None and detect_red_bordered_entries(patch, cfg):
+            if patch is not None and _has_red_highlight_in_roi(patch, cfg):
                 hits.append(t)
-        t += cfg.coarse_sample_sec
+        t += _coarse_step_at(t, cfg)
     stats.coarse_hits = len(hits)
     _kf_log(
         f"pass1 done: {stats.frames_sampled_pass1} samples, {stats.coarse_hits} red-border hits "
@@ -995,12 +1715,19 @@ def backward_anchor(
     stats: PipelineStats,
     debug: OcrDebugLogger,
     fp_cache: FingerprintCache,
+    coarse_origin: float | None = None,
 ) -> tuple[float, dict[str, Any], float]:
     anchor = coarse_t
     best_conf = 0.5
     t = coarse_t
     misses = 0
     limit = max(cfg.spawn_cutoff_sec, coarse_t - cfg.fine_max_back_sec)
+    if coarse_origin is not None and coarse_t > coarse_origin + cfg.fine_step_sec:
+        limit = max(cfg.spawn_cutoff_sec, coarse_origin - cfg.fine_step_sec)
+    lag_steps = 0
+    if coarse_origin is not None and coarse_t > coarse_origin:
+        lag_steps = int((coarse_t - coarse_origin) / cfg.fine_step_sec)
+    miss_budget = cfg.fine_miss_budget + lag_steps
     while t >= limit:
         found = False
         for item in fingerprints_at_time(t, cfg, reader, stats, debug, fp_cache):
@@ -1013,10 +1740,83 @@ def backward_anchor(
             misses = 0
         else:
             misses += 1
-            if misses > cfg.fine_miss_budget:
+            if misses > miss_budget:
                 break
         t -= cfg.fine_step_sec
     return anchor, seed_fp, best_conf
+
+
+def seeds_near_coarse(
+    coarse_t: float,
+    cfg: KillFeedConfig,
+    reader: FrameReader,
+    stats: PipelineStats,
+    debug: OcrDebugLogger,
+    fp_cache: FingerprintCache,
+) -> list[dict[str, Any]]:
+    """OCR seeds for a coarse hit; forward-scan only when feed lags the sample."""
+    seen_keys: set[str] = set()
+    items: list[dict[str, Any]] = []
+
+    def add_from(t: float) -> list[dict[str, Any]]:
+        added: list[dict[str, Any]] = []
+        for item in fingerprints_at_time(t, cfg, reader, stats, debug, fp_cache):
+            key = item.get("key") or fingerprint_key(item["fingerprint"])
+            if not key or key in seen_keys:
+                continue
+            seen_keys.add(key)
+            entry = {**item, "seed_time": round(t, 2)}
+            items.append(entry)
+            added.append(entry)
+            return added  # one red-bar kill per timestamp
+        return added
+
+    coarse_items = add_from(coarse_t)
+    if any(not is_partial_fingerprint(i["fingerprint"]) for i in coarse_items):
+        return coarse_items
+
+    t = coarse_t + cfg.fine_step_sec
+    while t <= coarse_t + cfg.fine_forward_sec:
+        if add_from(t):
+            return items
+        t += cfg.fine_step_sec
+
+    t = coarse_t - cfg.fine_step_sec
+    back_limit = max(cfg.spawn_cutoff_sec, coarse_t - cfg.fine_step_sec * 3)
+    while t >= back_limit:
+        if add_from(t):
+            return items
+        t -= cfg.fine_step_sec
+
+    return items
+
+
+def expand_pov_cluster_members(
+    registry: list[dict[str, Any]],
+    pov_cluster: dict[str, Any] | None,
+    pov_rep: str,
+) -> dict[str, Any] | None:
+    """Add recurring killer OCR spellings from the registry to the POV cluster."""
+    if not pov_rep:
+        return pov_cluster
+    pn = normalize_name(pov_rep)
+    members = list((pov_cluster or {}).get("members", []))
+    if pn and pn not in members:
+        members.append(pn)
+    for entry in registry:
+        k = normalize_name(entry.get("killer", ""))
+        if len(k) < 4 or is_garbage_ocr_name(k):
+            continue
+        if fuzzy_ratio(k, pn) >= 0.48 or (len(k) >= 5 and len(pn) >= 5 and k[:4] == pn[:4]):
+            members.append(k)
+    if not members:
+        return pov_cluster
+    unique = list(dict.fromkeys(members))
+    return {
+        "representative": pov_rep,
+        "members": unique,
+        "count": (pov_cluster or {}).get("count", len(unique)),
+    }
 
 
 def select_pov_cluster(
@@ -1035,7 +1835,9 @@ def select_pov_cluster(
         if v:
             victims.append(v)
 
-    k_clusters = cluster_names(killers, cfg.pov_cluster_threshold)
+    k_clusters = merge_meta_clusters(
+        cluster_names(killers, cfg.pov_cluster_threshold), threshold=0.48
+    )
     v_clusters = cluster_names(victims, cfg.pov_cluster_threshold)
     if not k_clusters and not v_clusters:
         return None, [], 0.0
@@ -1131,36 +1933,210 @@ def derive_pov_hint(channel: str | None, title: str | None) -> str | None:
     return None
 
 
+def build_trusted_pov_killers(
+    registry: list[dict[str, Any]],
+    pov_rep: str,
+    pov_cluster: dict[str, Any] | None,
+) -> set[str]:
+    """Killer spellings that belong to the POV player (frequency + fuzzy)."""
+    pn = normalize_name(pov_rep)
+    trusted: set[str] = set()
+    if pn:
+        trusted.add(pn)
+    if pov_cluster:
+        for member in pov_cluster.get("members", []):
+            mn = normalize_name(member)
+            if len(mn) >= 3 and not is_garbage_ocr_name(mn):
+                trusted.add(mn)
+
+    killer_counts: dict[str, int] = {}
+    for entry in registry:
+        k = normalize_name(entry.get("killer", ""))
+        if len(k) >= 4 and not is_garbage_ocr_name(k):
+            killer_counts[k] = killer_counts.get(k, 0) + 1
+
+    for k, count in killer_counts.items():
+        if fuzzy_ratio(k, pn) >= 0.58:
+            trusted.add(k)
+        elif count >= 2 and fuzzy_ratio(k, pn) >= 0.46:
+            trusted.add(k)
+        elif len(k) >= 5 and len(pn) >= 5 and k[:4] == pn[:4]:
+            trusted.add(k)
+    return trusted
+
+
+def is_likely_pov_ocr_spelling(name: str, pov_rep: str) -> bool:
+    """Heuristic: OCR reads of ``simple`` often contain simp/mple/impl fragments."""
+    k = normalize_name(name).lower()
+    pn = normalize_name(pov_rep).lower()
+    if len(k) < 4 or is_garbage_ocr_name(name):
+        return False
+    if fuzzy_ratio(k, pn) >= 0.58:
+        return True
+    if len(k) >= 5 and len(pn) >= 5 and k[:4] == pn[:4]:
+        return True
+    if any(tag in k for tag in (
+        "simp", "mpl", "impl", "lmpl", "mple", "aimpt", "imple", "eimp", "impt", "sinp", "clmp"
+    )):
+        return fuzzy_ratio(k, pn) >= 0.40
+    return False
+
+
+def raw_has_pov_killer_fragment(
+    raw: str,
+    pov_rep: str,
+    pov_cluster: dict[str, Any] | None,
+    cfg: KillFeedConfig,
+) -> bool:
+    """Detect POV killer spelling buried in noisy OCR (e.g. aimpte within a garbled line)."""
+    for name in _NAME_RE.findall(raw or ""):
+        if partial_killer_matches_pov(name, pov_rep, pov_cluster, cfg):
+            return True
+    compact = re.sub(r"[^A-Za-z0-9]", "", raw or "").lower()
+    pn = normalize_name(pov_rep).lower()
+    if len(pn) >= 5 and pn[:4] in compact and fuzzy_ratio(compact, pn) >= 0.42:
+        return True
+    return False
+
+
+def classify_registry_relaxed(
+    entry: dict[str, Any],
+    pov_rep: str,
+    pov_cluster: dict[str, Any] | None,
+    all_clusters: list[dict[str, Any]],
+    cfg: KillFeedConfig,
+    trusted_killers: set[str],
+) -> tuple[str, str]:
+    """Second pass: full OCR lines with plausible POV killer spelling."""
+    fp = entry.get("fingerprint", {})
+    if is_partial_fingerprint(fp):
+        return "skip", "partial"
+
+    killer = entry.get("killer", "") or fp.get("killer", "")
+    victim = entry.get("victim", "") or fp.get("victim", "")
+    vk = normalize_name(victim)
+    kk = normalize_name(killer)
+
+    if len(kk) < 4 or len(vk) < 3 or kk == vk or is_garbage_ocr_name(killer):
+        return "skip", "invalid"
+    if victim and name_matches_pov(victim, pov_rep, pov_cluster, cfg):
+        return "skip", "death"
+    if killer_is_foreign(killer, pov_cluster, all_clusters, cfg):
+        return "skip", "foreign"
+    if killer_is_trusted_pov(killer, trusted_killers, pov_rep, pov_cluster, cfg):
+        return "kill", "pov_relaxed_match"
+    if fuzzy_ratio(kk, normalize_name(pov_rep)) >= 0.50:
+        return "kill", "pov_relaxed_match"
+    return "skip", "not_pov"
+
+
+def killer_is_trusted_pov(
+    killer: str,
+    trusted: set[str],
+    pov_rep: str,
+    pov_cluster: dict[str, Any] | None,
+    cfg: KillFeedConfig,
+) -> bool:
+    k = normalize_name(killer)
+    if k in trusted:
+        return True
+    return name_matches_pov(killer, pov_rep, pov_cluster, cfg)
+
+
+def partial_killer_matches_pov(
+    killer: str,
+    pov_rep: str,
+    pov_cluster: dict[str, Any] | None,
+    cfg: KillFeedConfig,
+) -> bool:
+    """POV gate for partial OCR reads (single name only)."""
+    k = normalize_name(killer)
+    if len(k) < 4 or is_garbage_ocr_name(k):
+        return False
+    if is_likely_pov_ocr_spelling(killer, pov_rep):
+        return True
+    if not name_matches_pov(killer, pov_rep, pov_cluster, cfg):
+        return False
+    pn = normalize_name(pov_rep)
+    return fuzzy_ratio(k, pn) >= 0.52
+
+
+def _victim_is_weak_ocr(victim: str) -> bool:
+    v = normalize_name(victim)
+    return not v or len(v) <= 4 or is_garbage_ocr_name(victim)
+
+
 def classify_registry_entry(
     entry: dict[str, Any],
     pov_rep: str,
     pov_cluster: dict[str, Any] | None,
     all_clusters: list[dict[str, Any]],
     cfg: KillFeedConfig,
+    trusted_killers: set[str] | None = None,
 ) -> tuple[str, str]:
-    """Red-border line + POV name in OCR → kill. Foreign killer cluster → skip."""
+    """Red-border line + POV name in OCR → kill. Highlight event → kill when POV known."""
     if not pov_rep:
         return "skip", "no_pov"
 
     fp = entry.get("fingerprint", {})
+    trusted = trusted_killers or set()
+    if entry.get("highlight_only") or fp.get("highlight_only"):
+        hs = float(entry.get("highlight_score") or fp.get("highlight_score") or 0)
+        killer = entry.get("killer", "") or fp.get("killer", "")
+        raw = fp.get("raw", "")
+        if killer and killer_is_trusted_pov(killer, trusted, pov_rep, pov_cluster, cfg):
+            return "kill", "highlight_anchor"
+        if killer and partial_killer_matches_pov(killer, pov_rep, pov_cluster, cfg):
+            return "kill", "highlight_anchor"
+        for name in entry_names(entry, fp):
+            if partial_killer_matches_pov(name, pov_rep, pov_cluster, cfg):
+                return "kill", "highlight_anchor"
+        if raw_has_pov_killer_fragment(raw, pov_rep, pov_cluster, cfg):
+            return "kill", "highlight_anchor"
+        if killer and killer_is_foreign(killer, pov_cluster, all_clusters, cfg):
+            return "skip", "highlight_foreign"
+        fe = float(entry.get("frame_edge") or fp.get("frame_edge") or 0)
+        if hs >= 0.55 and fe >= cfg.min_highlight_frame_edge:
+            return "kill", "highlight_anchor"
+        return "skip", "highlight_not_pov"
+
     killer = entry.get("killer", "") or fp.get("killer", "")
     victim = entry.get("victim", "") or fp.get("victim", "")
     assist = entry.get("assist", "") or fp.get("assist", "")
 
-    if victim and name_matches_pov(victim, pov_rep, pov_cluster, cfg):
-        return "death", "pov_death"
+    trusted = trusted_killers or set()
 
-    if killer and name_matches_pov(killer, pov_rep, pov_cluster, cfg):
+    if victim and name_matches_pov(victim, pov_rep, pov_cluster, cfg):
+        if killer and killer_is_trusted_pov(killer, trusted, pov_rep, pov_cluster, cfg):
+            pass  # OCR swapped killer/victim on a POV frag
+        else:
+            return "death", "pov_death"
+
+    if killer and killer_is_trusted_pov(killer, trusted, pov_rep, pov_cluster, cfg):
+        if is_partial_fingerprint(fp):
+            if not partial_killer_matches_pov(killer, pov_rep, pov_cluster, cfg):
+                return "skip", "partial_weak_pov"
+        elif is_garbage_ocr_name(killer):
+            return "skip", "garbage_killer"
+        elif is_full_fingerprint(fp):
+            k_strict = name_matches_pov(killer, pov_rep, pov_cluster, cfg)
+            k_likely = is_likely_pov_ocr_spelling(killer, pov_rep)
+            if k_likely and not k_strict and _victim_is_weak_ocr(victim):
+                return "skip", "weak_ocr_line"
         reason = "pov_partial_killer" if is_partial_fingerprint(fp) else "pov_killer_match"
         return "kill", reason
 
     if assist and name_matches_pov(assist, pov_rep, pov_cluster, cfg):
-        return "kill", "pov_assist_swap"
+        if killer and killer_is_foreign(killer, pov_cluster, all_clusters, cfg):
+            return "kill", "pov_assist_swap"
+        return "skip", "assist_only"
 
     if is_partial_fingerprint(fp):
         for name in entry_names(entry, fp):
-            if name_matches_pov(name, pov_rep, pov_cluster, cfg):
+            if partial_killer_matches_pov(name, pov_rep, pov_cluster, cfg):
                 return "kill", "pov_partial_any"
+        if raw_has_pov_killer_fragment(fp.get("raw", ""), pov_rep, pov_cluster, cfg):
+            return "kill", "pov_raw_fragment"
         # Red border + single enemy name = OCR read victim only (common CS2 misread).
         names = entry_names(entry, fp)
         if len(names) == 1 and len(names[0]) >= 4:
@@ -1171,16 +2147,18 @@ def classify_registry_entry(
         return "skip", "partial_not_pov"
 
     if killer and killer_is_foreign(killer, pov_cluster, all_clusters, cfg):
-        if not victim or not name_matches_pov(victim, pov_rep, pov_cluster, cfg):
+        if entry_has_pov_name(entry, fp, pov_rep, pov_cluster, cfg):
             return "kill", "pov_foreign_killer_ocr"
         return "skip", "foreign_killer"
 
     if killer and not name_matches_pov(killer, pov_rep, pov_cluster, cfg):
-        vk = normalize_name(victim)
-        kk = normalize_name(killer)
-        if len(kk) >= 4 and (not vk or not name_matches_pov(victim, pov_rep, pov_cluster, cfg)):
-            if vk != kk:
-                return "kill", "pov_enemy_killer_field"
+        if entry_has_pov_name(entry, fp, pov_rep, pov_cluster, cfg):
+            return "kill", "pov_name_in_line"
+        if is_partial_fingerprint(fp) and raw_has_pov_killer_fragment(
+            fp.get("raw", ""), pov_rep, pov_cluster, cfg
+        ):
+            return "kill", "pov_raw_fragment"
+        return "skip", "not_pov"
 
     for name in entry_names(entry, fp):
         if name_matches_pov(name, pov_rep, pov_cluster, cfg):
@@ -1260,47 +2238,101 @@ def run_pipeline(
 
     try:
         preload_coarse_frame_cache(reader, duration, cfg)
-        coarse = coarse_scan(duration, cfg, reader, stats)
         registry: list[dict[str, Any]] = []
 
-        _kf_log(f"pass2 fine OCR: {len(coarse)} coarse seeds")
-        for seed_i, coarse_t in enumerate(coarse, start=1):
-            if seed_i == 1 or seed_i % 10 == 0 or seed_i == len(coarse):
+        events = highlight_event_scan(duration, cfg, reader, stats, debug)
+        _kf_log(
+            f"highlight OCR pass: {len(events)} events "
+            f"(transition_skip={stats.highlight_transition_skipped})"
+        )
+        feed_tracker = FeedPersistTracker(cfg)
+        for ev_i, ev in enumerate(events, start=1):
+            if ev_i == 1 or ev_i % 15 == 0 or ev_i == len(events):
                 _kf_log(
-                    f"pass2 progress: seed {seed_i}/{len(coarse)} t={coarse_t:.1f}s "
+                    f"OCR progress: {ev_i}/{len(events)} t={ev['t_bar']:.1f}s "
                     f"ocr_calls={stats.ocr_calls} registry={len(registry)}"
                 )
-            seed_items = fingerprints_at_time(
-                coarse_t, cfg, reader, stats, debug, fp_cache
+            t_bar = float(ev["t_bar"])
+            crop = ev["crop"]
+            stats.ocr_calls += 1
+            raw, _ocr_score = ocr_kill_bar(crop, cfg)
+            if len((raw or "").strip()) > 2:
+                stats.ocr_nonempty += 1
+
+            fp = parse_kill_fingerprint(raw)
+            valid = is_valid_kill_fingerprint(fp)
+            y0, y1 = ev.get("rect", (0, 0))
+            dup, dup_reason = feed_tracker.is_duplicate(t_bar, fp, y0, y1)
+            if dup:
+                stats.feed_persist_skipped += 1
+                debug.log(
+                    t_bar,
+                    crop,
+                    raw,
+                    fp,
+                    True,
+                    "rejected",
+                    f"feed_persist:{dup_reason}",
+                )
+                continue
+            feed_tracker.record(t_bar, fp, y0, y1)
+
+            highlight_only = not valid
+            if valid:
+                stats.ocr_parsed_as_kill_entry += 1
+                if is_partial_fingerprint(fp):
+                    stats.ocr_partial_reads += 1
+                key = fingerprint_key(fp)
+                seen_before_dedup.add(key)
+            else:
+                fp = {
+                    "killer": "",
+                    "assist": "",
+                    "victim": "",
+                    "partial": True,
+                    "highlight_only": True,
+                    "highlight_score": ev["highlight_score"],
+                    "frame_edge": ev.get("frame_edge", 0.0),
+                    "raw": raw or "",
+                }
+                key = f"hl|{t_bar:.1f}"
+                seen_before_dedup.add(key)
+
+            conf = round(
+                min(0.99, 0.5 + float(ev["highlight_score"]) * 0.35),
+                3,
             )
-            for item in seed_items:
-                seen_before_dedup.add(item["key"])
-                if find_registry_match(item["fingerprint"], registry, cfg.fuzzy_match_threshold):
-                    continue
-                anchor, fp, conf = backward_anchor(
-                    coarse_t,
-                    item["fingerprint"],
-                    cfg,
-                    reader,
-                    stats,
-                    debug,
-                    fp_cache,
-                )
-                seen_before_dedup.add(fingerprint_key(fp))
-                if find_registry_match(fp, registry, cfg.fuzzy_match_threshold):
-                    upsert_registry_entry(
-                        registry, fp, anchor, conf, cfg.fuzzy_match_threshold, stats
-                    )
-                    continue
-                upsert_registry_entry(
-                    registry, fp, anchor, conf, cfg.fuzzy_match_threshold, stats
-                )
+            debug.log(
+                t_bar,
+                crop,
+                raw,
+                fp,
+                True,
+                "accepted" if valid else "highlight_event",
+                "ok" if valid else "highlight_only",
+            )
+            upsert_registry_entry(
+                registry,
+                fp,
+                t_bar,
+                conf,
+                cfg.fuzzy_match_threshold,
+                stats,
+                bar_detection_s=t_bar,
+                highlight_score=float(ev["highlight_score"]),
+                highlight_only=highlight_only,
+                frame_edge=float(ev.get("frame_edge", 0.0)),
+                dedup_window_sec=cfg.dedup_time_window_sec,
+                debug_dedup=cfg.debug_ocr,
+            )
 
         stats.unique_fingerprints_before_dedup = len(seen_before_dedup)
         stats.unique_fingerprints_after_dedup = len(registry)
 
         pov_cluster, all_clusters, coverage = select_pov_cluster(registry, cfg)
         pov_rep = resolve_pov_rep(pov_cluster, pov_player_override)
+        pov_cluster = expand_pov_cluster_members(registry, pov_cluster, pov_rep)
+        trusted_killers = build_trusted_pov_killers(registry, pov_rep, pov_cluster)
         if pov_player_override:
             cluster_rep_dbg = (
                 normalize_name(pov_cluster["representative"]) if pov_cluster else "?"
@@ -1330,6 +2362,7 @@ def run_pipeline(
                 pov_cluster,
                 all_clusters,
                 cfg,
+                trusted_killers,
             )
             if kind == "death":
                 stats.pov_deaths_excluded += 1
@@ -1339,7 +2372,7 @@ def run_pipeline(
                 continue
             kills.append(
                 {
-                    "anchor_s": entry["anchor_s"],
+                    "anchor_s": kill_output_anchor(entry, cfg),
                     "killer": entry["killer"],
                     "assist": entry.get("assist", ""),
                     "victim": entry["victim"],
@@ -1347,6 +2380,9 @@ def run_pipeline(
                     "pov_reason": reason,
                 }
             )
+
+        kills = collapse_kill_events(kills, cfg.kill_dedupe_gap_sec, pov_rep or "")
+        kills = dedupe_output_kills(kills, cfg.output_dedupe_gap_sec, pov_rep or "")
 
         stats.kills_found = len(kills)
         skipped = len(registry) - len(kills) - stats.pov_deaths_excluded
@@ -1364,6 +2400,11 @@ def run_pipeline(
             f"pipeline done: kills={stats.kills_found} clips={stats.clips_produced} "
             f"ocr={stats.ocr_calls} parsed={stats.ocr_parsed_as_kill_entry} "
             f"fp={stats.unique_fingerprints_after_dedup}/{stats.unique_fingerprints_before_dedup}"
+            + (
+                f" dedup_window_rejected={stats.registry_dedup_window_rejected}"
+                if cfg.debug_ocr
+                else ""
+            )
         )
 
         return {

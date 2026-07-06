@@ -4,7 +4,7 @@ YouTube/VOD → AI highlights → vertical clips (Shorts, TikTok, Reels).
 
 > **Living documentation.** This file is the single source of truth for architecture, pipeline behaviour, and production deploy. **Agents must update it in the same session** when adding, removing, or changing features (see `AGENTS.md` and `.cursor/rules/readme-sync.mdc`).
 
-**Last updated:** 2026-07-02 (Kill-detection eval harness: ground_truth.json + scoring.py)
+**Last updated:** 2026-07-06 (Registry dedup time window 7s)
 
 ---
 
@@ -116,6 +116,8 @@ audioEnergyScan → hudKillFeed (Python ROI scan) → filterQualityHudKills
 - Skipping `isCoherentKillMontage` for HUD packs
 - `fallback_red_border` in `kill_feed_pipeline.py` — counted every red-border feed line (~3× false kills); use `killer_matches_pov` only
 - `pov_partial_victim_foreign` returning `"kill"` — ~52 false kills (enemy names OCR'd as single victim); must return `"skip"` to prevent no-frag montage segments
+- **Skipping forward fine-scan on coarse hits** — kill-feed lines often appear 1–4s after the pass-1 sample; `seeds_near_coarse()` must scan forward before abandoning a red-border hit (FN regressions at 61s/97s)
+- **`collapse_kill_events` merging real multi-kills** — back-to-back frags on different players with full OCR (GT 790+791) must stay separate; only merge different victims when `_partial_ocr_same_engagement()` (garbage victim / POV spelling variants, e.g. 97s triple OCR)
 - **Override always replacing the OCR cluster rep** — CS2 renders `s1mple` but OCR reliably reads `simple`; forcing the literal gamertag (`s1mple`) lowers fuzzy match vs the rest of the feed. `resolve_pov_rep()` must keep the cluster spelling when override and cluster agree, and only swap in the override on disagreement (wrong cluster)
 - Narrow center crop for landscape 9:16 (`cropH=full, cropW=H*9/16`) — cuts off FPS weapon model; use blur-letterbox in `smartCrop.js`
 - Debug kill-export panel in main UI without `?debug=1` — use `isDebugUiEnabled()` only
@@ -299,6 +301,15 @@ Tunables live in `KillFeedConfig` (`kill_feed_pipeline.py`); montage cut buffers
 
 | Date | Change |
 |------|--------|
+| 2026-07-06 | **Kill-feed registry dedup:** `find_registry_match()` gated by `dedup_time_window_sec=7.0` (sync with `killDetect.js` `sameKillWindowSec`); far-apart same-fingerprint kills no longer merged |
+| 2026-07-05 | **Kill-feed bar sanity:** `_kill_feed_row_sanity` — reject wall/orange strips (low bright text + weak frame edge); fixes fn2@58s false bar |
+| 2026-07-05 | **Kill-feed v12:** `highlight_event_scan` — adaptive idle/hunt/lock; `detect_highlight_bar` (frame-edge score); one OCR per event; `bar_detection_s` = event time; CLI `--pov` |
+| 2026-07-04 | **Kill-feed anchor model:** one dark-row bar with red signal per frame → `bar_detection_s` = fine-scan timestamp; cut via `kill_output_anchor(bar − lag)` (no backward OCR walk) |
+| 2026-07-04 | **Kill-feed highlight filter:** `_red_highlight_frame_score` + `_filter_red_highlight_entries` — only red-framed CS2 highlight lines, not gray feed rows |
+| 2026-07-04 | **Kill-feed bar OCR:** `_split_feed_lines` + `_expand_kill_bar_bounds` — full kill-feed row for OCR |
+| 2026-07-04 | **Kill-feed v10:** skip `weak_ocr_line`; partial-OCR engagement merge; keep v9 `forward_lag_sec` timing |
+| 2026-07-03 | **Kill-feed v9:** `kill_output_anchor()` prefers `forward_lag_sec` from forward fine-scan; POV OCR spelling dedupe in `dedupe_output_kills(pov_rep)` |
+| 2026-07-03 | **Kill-feed v6:** adaptive `forward_lag` on delayed feed seeds; `dedupe_output_kills` for duplicate coarse anchors; registry re-anchor on fingerprint match; `kill_output_anchor()` helper |
 | 2026-07-02 | **Kill-detection eval:** `ground_truth.json` + `scoring.py` (TP/FP/FN, precision/recall/F1, run history in `results.json`); finer backward anchor step (0.33s) and slightly lower red-border thresholds in `KillFeedConfig`; Tesseract auto-discovery via `TESSERACT_CMD` |
 | 2026-06-24 | **Shooter montage builder:** Dense local POV kill-feed fights now stay continuous (≤22s gaps, ≤32s span) instead of being reduced to two jump-cuts; Python `two-pass-ocr` kill events bypass `collapseHudEngagements`; HUD de-dupe is timeline-grouped instead of score-first; preview rendering dedupes in-flight identical builds and saves cache state with the post-recut raw fingerprint to stop repeated `/api/preview` re-cuts |
 | 2026-06-24 | **Montage timing fix:** HUD/red kill segments widened to ~1.0s pre + ~7s post (`maxSegDur` 8.5) so a kill (and a push into the next frag) isn't clipped at segment end; removed `snapPeakToGunshot` call in `buildKillSegmentAtAnchor` (was shifting the cut before the visible kill). Diagnosed from job `1025114a` hl-0 where seg2 ended at 125.8s right as the B-site frag started |

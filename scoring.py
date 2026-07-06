@@ -21,6 +21,9 @@ DEFAULT_RESULTS = REPO_ROOT / "results.json"
 DEFAULT_VIDEO = REPO_ROOT / "testvid.mp4"
 DETECT_SCRIPT = REPO_ROOT / "server" / "scripts" / "kill_feed_detect.py"
 FFMPEG_STATIC = REPO_ROOT / "server" / "node_modules" / "ffmpeg-static" / "ffmpeg.exe"
+FFMPEG_STATIC_UNIX = REPO_ROOT / "server" / "node_modules" / "ffmpeg-static" / "ffmpeg"
+# Production VPS fallback when eval runs from /tmp/videclip-eval
+FFMPEG_VPS = Path("/opt/videclip/server/node_modules/ffmpeg-static/ffmpeg")
 
 # Seconds within which a detection counts as matching a ground-truth kill.
 MATCH_TOLERANCE_SEC = 2.0
@@ -29,6 +32,8 @@ MATCH_TOLERANCE_SEC = 2.0
 _TESSERACT_CANDIDATES = (
     Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
     Path(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"),
+    Path("/usr/bin/tesseract"),
+    Path("/usr/local/bin/tesseract"),
 )
 
 
@@ -38,6 +43,10 @@ def resolve_ffmpeg_path() -> str | None:
         return env
     if FFMPEG_STATIC.is_file():
         return str(FFMPEG_STATIC)
+    if FFMPEG_STATIC_UNIX.is_file():
+        return str(FFMPEG_STATIC_UNIX)
+    if FFMPEG_VPS.is_file():
+        return str(FFMPEG_VPS)
     return None
 
 

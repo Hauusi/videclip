@@ -2,7 +2,7 @@
 """
 CS2 POV kill-feed detection (stdin JSON → stdout JSON).
 
-Two-pass pipeline: coarse red-border scan (3s) → fine backward OCR anchors.
+Highlight-event scan (red frame) → one OCR per event → POV filter.
 """
 import json
 import os
@@ -26,6 +26,7 @@ def main():
         video = sys.argv[2]
         duration = 0.0
         debug = False
+        pov_cli: str | None = os.environ.get("POV_PLAYER_EVAL") or None
         i = 3
         while i < len(sys.argv):
             if sys.argv[i] == "--duration" and i + 1 < len(sys.argv):
@@ -34,6 +35,9 @@ def main():
             elif sys.argv[i] == "--debug":
                 debug = True
                 i += 1
+            elif sys.argv[i] == "--pov" and i + 1 < len(sys.argv):
+                pov_cli = sys.argv[i + 1]
+                i += 2
             else:
                 i += 1
         if duration <= 0:
@@ -49,7 +53,13 @@ def main():
         if debug:
             cfg.debug_ocr = True
             cfg.debug_dir = os.path.join(os.path.dirname(video) or ".", "killfeed_debug")
-        result = run_pipeline(video, duration, cfg=cfg, ffmpeg_bin=ffmpeg_bin())
+        result = run_pipeline(
+            video,
+            duration,
+            cfg=cfg,
+            pov_player_override=pov_cli,
+            ffmpeg_bin=ffmpeg_bin(),
+        )
         print(json.dumps(result, indent=2))
         s = result.get("stats", {})
         print(
