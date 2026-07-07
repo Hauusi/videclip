@@ -1268,7 +1268,7 @@ def ocr_kill_bar(bar_bgr: np.ndarray, cfg: KillFeedConfig) -> tuple[str, float]:
     )
     best_text, best_score = _ocr_threshold_passes(gray, tess_whitelist)
 
-    if len(_NAME_RE.findall(best_text)) < 2:
+    if len(_NAME_RE.findall(best_text)) == 0:
         tess_open = f"--psm {cfg.ocr_psm}"
         try:
             rus_text, rus_score = _ocr_threshold_passes(gray, tess_open, lang="eng+rus")
