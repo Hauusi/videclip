@@ -2327,6 +2327,7 @@ def run_pipeline(
         stats.unique_fingerprints_after_dedup = len(registry)
 
         pov_cluster, all_clusters, coverage = select_pov_cluster(registry, cfg)
+        _kf_log(f"POV cluster members: {pov_cluster.get('members', []) if pov_cluster else 'NONE'}")
         pov_rep = resolve_pov_rep(pov_cluster, pov_player_override)
         pov_cluster = expand_pov_cluster_members(registry, pov_cluster, pov_rep)
         trusted_killers = build_trusted_pov_killers(registry, pov_rep, pov_cluster)
