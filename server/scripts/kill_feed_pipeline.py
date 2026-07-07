@@ -1819,6 +1819,19 @@ def expand_pov_cluster_members(
     }
 
 
+def seed_pov_from_first_kill(registry: list[dict[str, Any]], cfg: KillFeedConfig) -> str | None:
+    """First registry entry with a plausible killer name becomes the fixed POV reference.
+    Avoids cluster-scoring contamination where a frequently-misread wrong name
+    can outscore the fragmented but correct POV reads."""
+    for entry in sorted(registry, key=lambda e: e["anchor_s"]):
+        fp = entry.get("fingerprint", {})
+        killer = entry.get("killer", "") or fp.get("killer", "")
+        k = normalize_name(killer)
+        if len(k) >= 4 and not is_garbage_ocr_name(k) and is_valid_kill_fingerprint(fp):
+            return killer
+    return None
+
+
 def select_pov_cluster(
     registry: list[dict[str, Any]],
     cfg: KillFeedConfig,
@@ -2328,7 +2341,18 @@ def run_pipeline(
 
         pov_cluster, all_clusters, coverage = select_pov_cluster(registry, cfg)
         _kf_log(f"POV cluster members: {pov_cluster.get('members', []) if pov_cluster else 'NONE'}")
-        pov_rep = resolve_pov_rep(pov_cluster, pov_player_override)
+        seeded_pov = seed_pov_from_first_kill(registry, cfg)
+        if pov_player_override:
+            pov_rep = resolve_pov_rep(pov_cluster, pov_player_override)
+        elif seeded_pov:
+            pov_rep = seeded_pov
+            _kf_log(
+                f"POV seeded from first kill: '{seeded_pov}' "
+                f"(cluster would have been: {pov_cluster.get('representative') if pov_cluster else 'NONE'})"
+            )
+        else:
+            pov_rep = resolve_pov_rep(pov_cluster, pov_player_override)
+            _kf_log(f"POV seed unavailable, falling back to cluster: '{pov_rep}'")
         pov_cluster = expand_pov_cluster_members(registry, pov_cluster, pov_rep)
         trusted_killers = build_trusted_pov_killers(registry, pov_rep, pov_cluster)
         if pov_player_override:
