@@ -2095,9 +2095,6 @@ def classify_registry_entry(
             return "kill", "highlight_anchor"
         if killer and killer_is_foreign(killer, pov_cluster, all_clusters, cfg):
             return "skip", "highlight_foreign"
-        fe = float(entry.get("frame_edge") or fp.get("frame_edge") or 0)
-        if hs >= 0.55 and fe >= cfg.min_highlight_frame_edge:
-            return "kill", "highlight_anchor"
         return "skip", "highlight_not_pov"
 
     killer = entry.get("killer", "") or fp.get("killer", "")
