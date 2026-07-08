@@ -2287,6 +2287,28 @@ def run_pipeline(
             crop = ev["crop"]
             stats.ocr_calls += 1
             raw, _ocr_score = ocr_kill_bar(crop, cfg)
+            best_raw, best_score = raw, _ocr_score
+            if len(_NAME_RE.findall(best_raw)) == 0:
+                for extra_delay in (0.5, 1.0, 1.5):
+                    t_try = t_bar + extra_delay
+                    frame_try = get_frame(reader, t_try)
+                    if frame_try is None:
+                        continue
+                    patch_try = crop_roi(frame_try, cfg)
+                    if patch_try is None:
+                        continue
+                    bars_try = detect_highlight_bar(patch_try, cfg)
+                    if not bars_try:
+                        break
+                    y0t, y1t = bars_try[0]["rect"]
+                    band_try = patch_try[y0t:y1t, :]
+                    text_try, score_try = ocr_kill_bar(band_try, cfg)
+                    stats.ocr_calls += 1
+                    if len(_NAME_RE.findall(text_try)) > len(_NAME_RE.findall(best_raw)):
+                        best_raw, best_score = text_try, score_try
+                        if len(_NAME_RE.findall(best_raw)) >= 2:
+                            break
+            raw, _ocr_score = best_raw, best_score
             if len((raw or "").strip()) > 2:
                 stats.ocr_nonempty += 1
 
