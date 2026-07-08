@@ -1827,15 +1827,29 @@ def expand_pov_cluster_members(
 
 
 def seed_pov_from_first_kill(registry: list[dict[str, Any]], cfg: KillFeedConfig) -> str | None:
-    """First registry entry with a plausible killer name becomes the fixed POV reference.
-    Avoids cluster-scoring contamination where a frequently-misread wrong name
-    can outscore the fragmented but correct POV reads."""
+    """POV reference requires >=2 independent registry entries (different anchor
+    times) with fuzzy-matching killer names. A single OCR read is not trusted,
+    since misreads (e.g. 'katka', 'ises') can otherwise seed the wrong identity."""
+    candidates: list[tuple[float, str, str]] = []
     for entry in sorted(registry, key=lambda e: e["anchor_s"]):
         fp = entry.get("fingerprint", {})
         killer = entry.get("killer", "") or fp.get("killer", "")
         k = normalize_name(killer)
         if len(k) >= 4 and not is_garbage_ocr_name(k) and is_valid_kill_fingerprint(fp):
-            return killer
+            candidates.append((entry["anchor_s"], killer, k))
+
+    for i, (t_i, killer_i, k_i) in enumerate(candidates):
+        confirmations = 1
+        best_alt = killer_i
+        for j, (t_j, killer_j, k_j) in enumerate(candidates):
+            if i == j:
+                continue
+            if fuzzy_ratio(k_i, k_j) >= 0.72:
+                confirmations += 1
+                if len(killer_j) > len(best_alt):
+                    best_alt = killer_j
+        if confirmations >= 2:
+            return best_alt
     return None
 
 
