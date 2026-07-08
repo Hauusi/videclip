@@ -82,6 +82,7 @@ class KillFeedConfig:
     red_h2_high: int = 180
     red_s_min: int = 70
     red_v_min: int = 70
+    min_red_v_std: float = 16.0
 
     min_entry_width: int = 40
     min_entry_height: int = 14
@@ -882,6 +883,12 @@ def _build_highlight_entry(
     )
     border_score = _border_score(band, red_band)
     red_ratio = float(np.mean(red_band > 0))
+
+    band_hsv = cv2.cvtColor(band, cv2.COLOR_BGR2HSV)
+    v_masked = band_hsv[:, :, 2][red_band > 0]
+    v_std = float(np.std(v_masked)) if v_masked.size >= 10 else 0.0
+    if v_std < cfg.min_red_v_std:
+        return None
 
     if frame_edge < cfg.min_highlight_frame_edge and border_score < 0.015:
         if red_ratio < 0.09:
