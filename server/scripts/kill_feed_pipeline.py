@@ -132,6 +132,15 @@ class KillFeedConfig:
     debug_ocr: bool = False
     debug_dir: str | None = None
 
+    card_roi_x0: float = 0.450
+    card_roi_x1: float = 0.550
+    card_roi_y0: float = 0.850
+    card_roi_y1: float = 1.000
+    card_cyan_threshold: int = 300
+    card_event_gap_sec: float = 1.0
+    card_confirm_window_sec: float = 1.0
+    card_dedupe_vs_existing_sec: float = 2.0
+
 
 @dataclass
 class PipelineStats:
@@ -155,6 +164,8 @@ class PipelineStats:
     feed_persist_skipped: int = 0
     highlight_transition_skipped: int = 0
     registry_dedup_window_rejected: int = 0
+    killstreak_card_events: int = 0
+    killstreak_card_confirmed: int = 0
 
 
 @dataclass
@@ -2238,6 +2249,73 @@ def merge_clips(
     return merged
 
 
+def scan_killstreak_cards(
+    reader: FrameReader,
+    cfg: KillFeedConfig,
+    stats: PipelineStats,
+    duration: float,
+) -> list[float]:
+    """Detect POV kills via the CS2 killstreak card (bottom-center HUD element,
+    cyan-colored, shows a rising kill count). Independent of kill-feed OCR —
+    confirmed via a nearby red kill-feed bar (presence only, no name match)."""
+    NORM_W, NORM_H = 1280, 720
+
+    def cyan_count(frame: np.ndarray) -> int:
+        if frame.shape[:2] != (NORM_H, NORM_W):
+            frame = cv2.resize(frame, (NORM_W, NORM_H), interpolation=cv2.INTER_AREA)
+        x0 = int(NORM_W * cfg.card_roi_x0)
+        x1 = int(NORM_W * cfg.card_roi_x1)
+        y0 = int(NORM_H * cfg.card_roi_y0)
+        y1 = int(NORM_H * cfg.card_roi_y1)
+        crop = frame[y0:y1, x0:x1]
+        b = crop[:, :, 0].astype(int)
+        g = crop[:, :, 1].astype(int)
+        r = crop[:, :, 2].astype(int)
+        mask = (g > 110) & (b > 100) & (g > r + 20) & (b > r + 8)
+        return int(mask.sum())
+
+    def has_nearby_bar(t_center: float, window: float, step: float = 0.5) -> bool:
+        tt = t_center - window
+        while tt <= t_center + window:
+            frame = get_frame(reader, tt)
+            if frame is not None:
+                patch = crop_roi(frame, cfg)
+                if patch is not None and detect_highlight_bar(patch, cfg):
+                    return True
+            tt += step
+        return False
+
+    hits: list[tuple[float, int]] = []
+    t = cfg.spawn_cutoff_sec
+    while t < duration:
+        frame = get_frame(reader, t)
+        if frame is not None:
+            n = cyan_count(frame)
+            if n >= cfg.card_cyan_threshold:
+                hits.append((round(t, 2), n))
+        t += 0.5
+
+    events: list[list[tuple[float, int]]] = []
+    for ht, hn in hits:
+        if events and ht - events[-1][-1][0] < cfg.card_event_gap_sec:
+            events[-1].append((ht, hn))
+        else:
+            events.append([(ht, hn)])
+
+    confirmed: list[float] = []
+    for ev in events:
+        ev_t = ev[0][0]
+        if has_nearby_bar(ev_t, cfg.card_confirm_window_sec):
+            confirmed.append(ev_t)
+
+    stats.killstreak_card_events = len(events)
+    stats.killstreak_card_confirmed = len(confirmed)
+    _kf_log(
+        f"killstreak card scan: {len(events)} events, {len(confirmed)} confirmed"
+    )
+    return confirmed
+
+
 def run_pipeline(
     video_path: str,
     duration: float,
@@ -2448,6 +2526,28 @@ def run_pipeline(
 
         kills = collapse_kill_events(kills, cfg.kill_dedupe_gap_sec, pov_rep or "")
         kills = dedupe_output_kills(kills, cfg.output_dedupe_gap_sec, pov_rep or "")
+
+        if pov_rep:
+            card_times = scan_killstreak_cards(reader, cfg, stats, duration)
+            existing_anchors = [k["anchor_s"] for k in kills]
+            added = 0
+            for ct in card_times:
+                if all(abs(ct - a) > cfg.card_dedupe_vs_existing_sec for a in existing_anchors):
+                    kills.append(
+                        {
+                            "anchor_s": ct,
+                            "killer": pov_rep,
+                            "assist": "",
+                            "victim": "",
+                            "confidence": 0.8,
+                            "pov_reason": "killstreak_card",
+                        }
+                    )
+                    existing_anchors.append(ct)
+                    added += 1
+            if added:
+                kills.sort(key=lambda k: k["anchor_s"])
+                _kf_log(f"killstreak card: added {added} kills not covered by name-OCR")
 
         stats.kills_found = len(kills)
         skipped = len(registry) - len(kills) - stats.pov_deaths_excluded
