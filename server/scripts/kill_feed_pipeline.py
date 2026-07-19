@@ -1291,6 +1291,13 @@ def ocr_kill_bar(bar_bgr: np.ndarray, cfg: KillFeedConfig) -> tuple[str, float]:
     best_text, best_score = _ocr_threshold_passes(gray, tess_whitelist)
 
     if len(_NAME_RE.findall(best_text)) == 0:
+        blur = cv2.GaussianBlur(gray, (0, 0), 3)
+        sharp = cv2.addWeighted(gray, 1.5, blur, -0.5, 0)
+        sharp_text, sharp_score = _ocr_threshold_passes(sharp, tess_whitelist)
+        if len(_NAME_RE.findall(sharp_text)) > 0:
+            best_text, best_score = sharp_text, sharp_score
+
+    if len(_NAME_RE.findall(best_text)) == 0:
         tess_open = f"--psm {cfg.ocr_psm}"
         try:
             rus_text, rus_score = _ocr_threshold_passes(gray, tess_open, lang="eng+rus")
