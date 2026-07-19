@@ -139,7 +139,11 @@ class KillFeedConfig:
     card_cyan_threshold: int = 300
     card_event_gap_sec: float = 1.0
     card_confirm_window_sec: float = 1.0
-    card_dedupe_vs_existing_sec: float = 2.0
+    # 7.0s statt 2.0s: derselbe Kill kann über Karten-Signal und Namens-OCR
+    # mit spürbarem zeitlichem Versatz gemeldet werden (z.B. GT=61s wurde per
+    # Namens-OCR bei 61.5s erfasst, dieselbe Karte aber erst bei 65.5s erkannt)
+    # - 7.0s deckt sich mit dem bestehenden dedup_time_window_sec Standard.
+    card_dedupe_vs_existing_sec: float = 7.0
 
 
 @dataclass
