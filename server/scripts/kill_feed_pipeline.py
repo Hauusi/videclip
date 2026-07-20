@@ -1316,7 +1316,8 @@ def ocr_kill_bar(bar_bgr: np.ndarray, cfg: KillFeedConfig) -> tuple[str, float]:
 
 
 def parse_kill_fingerprint(ocr_text: str) -> dict[str, Any]:
-    names = [normalize_name(n) for n in _NAME_RE.findall(ocr_text or "")]
+    _cleaned_for_names = re.sub(r"_-+", " ", ocr_text or "")
+    names = [normalize_name(n) for n in _NAME_RE.findall(_cleaned_for_names)]
     names = [n for n in names if len(n) >= 3 and not is_garbage_ocr_name(n)]
     if not names:
         return {"killer": "", "assist": "", "victim": "", "partial": False, "raw": ocr_text or ""}
