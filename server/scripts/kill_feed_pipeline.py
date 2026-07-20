@@ -2279,6 +2279,9 @@ def scan_killstreak_cards(
     cfg: KillFeedConfig,
     stats: PipelineStats,
     duration: float,
+    pov_rep: str,
+    pov_cluster: dict[str, Any] | None,
+    all_clusters: list[dict[str, Any]],
 ) -> list[float]:
     """Detect POV kills via the CS2 killstreak card (bottom-center HUD element,
     cyan-colored, shows a rising kill count). Independent of kill-feed OCR —
@@ -2305,8 +2308,25 @@ def scan_killstreak_cards(
             frame = get_frame(reader, tt)
             if frame is not None:
                 patch = crop_roi(frame, cfg)
-                if patch is not None and detect_highlight_bar(patch, cfg):
-                    return True
+                if patch is not None:
+                    bars = detect_highlight_bar(patch, cfg)
+                    if bars:
+                        raw, _ = ocr_kill_bar(bars[0]["crop"], cfg)
+                        fp = parse_kill_fingerprint(raw)
+                        all_names = entry_names(fp, fp)
+                        any_pov_like = any(
+                            name_matches_pov(n, pov_rep, pov_cluster, cfg)
+                            for n in all_names
+                        )
+                        any_foreign = any(
+                            len(n) >= 4 and fuzzy_ratio(n, normalize_name(pov_rep)) < 0.35
+                            for n in all_names
+                        )
+                        _kf_log(f"card confirm check t={tt:.2f} names={all_names} any_pov={any_pov_like} any_foreign={any_foreign}")
+                        if any_foreign and not any_pov_like:
+                            tt += step
+                            continue
+                        return True
             tt += step
         return False
 
@@ -2554,7 +2574,7 @@ def run_pipeline(
         kills = dedupe_output_kills(kills, cfg.output_dedupe_gap_sec, pov_rep or "")
 
         if pov_rep:
-            card_times = scan_killstreak_cards(reader, cfg, stats, duration)
+            card_times = scan_killstreak_cards(reader, cfg, stats, duration, pov_rep, pov_cluster, all_clusters)
             existing_anchors = [k["anchor_s"] for k in kills]
             added = 0
             for ct in card_times:
