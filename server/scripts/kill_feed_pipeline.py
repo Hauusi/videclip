@@ -1411,6 +1411,7 @@ def find_registry_match(
     anchor: float,
     window_sec: float,
     *,
+    rect: tuple[int, int] | None = None,
     debug: bool = False,
     stats: PipelineStats | None = None,
 ) -> dict[str, Any] | None:
@@ -1429,6 +1430,15 @@ def find_registry_match(
                     )
             continue
         if fingerprint_match(fp, entry["fingerprint"], threshold):
+            entry_rect = entry.get("rect")
+            if rect is not None and entry_rect is not None:
+                cy_new = (rect[0] + rect[1]) / 2.0
+                cy_old = (entry_rect[0] + entry_rect[1]) / 2.0
+                if abs(cy_new - cy_old) > 18:
+                    # Gleicher Fingerprint, aber deutlich andere Bildschirm-Position
+                    # innerhalb des Zeitfensters -> vermutlich neuer, separater Kill
+                    # in einer dichten Serie, nicht dasselbe Ereignis. Nicht mergen.
+                    continue
             return entry
     return None
 
@@ -1445,6 +1455,7 @@ def upsert_registry_entry(
     bar_detection_s: float | None = None,
     highlight_score: float = 0.0,
     highlight_only: bool = False,
+    rect: tuple[int, int] | None = None,
     frame_edge: float = 0.0,
     dedup_window_sec: float = 7.0,
     debug_dedup: bool = False,
@@ -1456,6 +1467,7 @@ def upsert_registry_entry(
         threshold,
         anchor,
         dedup_window_sec,
+        rect=rect,
         debug=debug_dedup,
         stats=stats,
     )
@@ -1473,6 +1485,7 @@ def upsert_registry_entry(
             "highlight_score": round(highlight_score, 3),
             "highlight_only": highlight_only,
             "frame_edge": round(frame_edge, 4),
+            "rect": rect,
         }
         registry.append(entry)
         return entry
@@ -2379,7 +2392,7 @@ def run_pipeline(
             raw, _ocr_score = ocr_kill_bar(crop, cfg)
             best_raw, best_score = raw, _ocr_score
             if len(_NAME_RE.findall(best_raw)) == 0:
-                for extra_delay in (0.25, 0.5, 0.75, 1.0, 1.25, 1.5):
+                for extra_delay in (0.5, 1.0, 1.5):
                     t_try = t_bar + extra_delay
                     frame_try = get_frame(reader, t_try)
                     if frame_try is None:
@@ -2467,6 +2480,7 @@ def run_pipeline(
                 frame_edge=float(ev.get("frame_edge", 0.0)),
                 dedup_window_sec=cfg.dedup_time_window_sec,
                 debug_dedup=cfg.debug_ocr,
+                rect=ev.get("rect"),
             )
 
         stats.unique_fingerprints_before_dedup = len(seen_before_dedup)
