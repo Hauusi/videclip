@@ -2379,7 +2379,7 @@ def run_pipeline(
             raw, _ocr_score = ocr_kill_bar(crop, cfg)
             best_raw, best_score = raw, _ocr_score
             if len(_NAME_RE.findall(best_raw)) == 0:
-                for extra_delay in (0.5, 1.0, 1.5):
+                for extra_delay in (0.25, 0.5, 0.75, 1.0, 1.25, 1.5):
                     t_try = t_bar + extra_delay
                     frame_try = get_frame(reader, t_try)
                     if frame_try is None:
