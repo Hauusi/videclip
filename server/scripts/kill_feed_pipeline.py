@@ -2319,7 +2319,7 @@ def scan_killstreak_cards(
                             for n in all_names
                         )
                         any_foreign = any(
-                            len(n) >= 4 and fuzzy_ratio(n, normalize_name(pov_rep)) < 0.35
+                            4 <= len(n) <= 14 and fuzzy_ratio(n, normalize_name(pov_rep)) < 0.35
                             for n in all_names
                         )
                         _kf_log(f"card confirm check t={tt:.2f} names={all_names} any_pov={any_pov_like} any_foreign={any_foreign}")
