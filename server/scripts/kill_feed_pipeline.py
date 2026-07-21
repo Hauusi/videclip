@@ -2347,11 +2347,15 @@ def scan_killstreak_cards(
         else:
             events.append([(ht, hn)])
 
-    confirmed: list[float] = []
+    confirmed: list[tuple[float, bool]] = []
     for ev in events:
         ev_t = ev[0][0]
         if has_nearby_bar(ev_t, cfg.card_confirm_window_sec):
-            confirmed.append(ev_t)
+            is_burst = any(
+                abs(other[0][0] - ev_t) <= 3.0 and other is not ev
+                for other in events
+            )
+            confirmed.append((ev_t, is_burst))
 
     stats.killstreak_card_events = len(events)
     stats.killstreak_card_confirmed = len(confirmed)
@@ -2577,8 +2581,9 @@ def run_pipeline(
             card_times = scan_killstreak_cards(reader, cfg, stats, duration, pov_rep, pov_cluster, all_clusters)
             existing_anchors = [k["anchor_s"] for k in kills]
             added = 0
-            for ct in card_times:
-                if all(abs(ct - a) > cfg.card_dedupe_vs_existing_sec for a in existing_anchors):
+            for ct, is_burst in card_times:
+                dedupe_threshold = 2.0 if is_burst else cfg.card_dedupe_vs_existing_sec
+                if all(abs(ct - a) > dedupe_threshold for a in existing_anchors):
                     kills.append(
                         {
                             "anchor_s": ct,
