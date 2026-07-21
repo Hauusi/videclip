@@ -134,6 +134,8 @@ export const MAX_KILL_SEG_BEFORE_SEC = 3;
 /** Met via multiple tight kill cuts, not pre-kill walking padding. */
 export const MIN_SHOOTER_MONTAGE_SEC = 12;
 export const HUD_EVENT_DEDUPE_GAP_SEC = 1.6;
+/** Kurzer Standard-Nachlauf wenn kein weiterer Kill zeitnah folgt (statt totem Gameplay). */
+export const NO_FOLLOWUP_SEG_AFTER_SEC = 2.0;
 
 /**
  * Anchor on kill moment: CS2 feed flashes AFTER the frag.
@@ -262,11 +264,17 @@ export function buildKillSegmentAtAnchor(
   // before the visible kill, clipping the frag (see README "Do NOT reintroduce").
   const anchor = resolveHudKillAnchor(event, event?.roi ?? '', timing);
   const segBefore = timing.segBefore ?? timing.clipBefore ?? effectiveSegBefore(timing);
-  let segAfter = timing.segAfter ?? timing.clipAfter ?? 4.5;
-  if (!timing.fixedKillWindow && nextKillEvent) {
+  const maxChainLookahead = timing.segAfter ?? timing.clipAfter ?? 4.5;
+  const minRequiredSegAfter = Math.max(NO_FOLLOWUP_SEG_AFTER_SEC, (timing.minSegDur ?? 4) - segBefore);
+  let segAfter = minRequiredSegAfter;
+  if (timing.fixedKillWindow) {
+    segAfter = timing.segAfter ?? timing.clipAfter ?? 4.5;
+  } else if (nextKillEvent) {
     const nextAnchor = resolveHudKillAnchor(nextKillEvent, nextKillEvent?.roi ?? '', timing);
-    const maxAfter = nextAnchor - anchor - 0.25;
-    segAfter = Math.min(segAfter, Math.max(0.9, maxAfter));
+    const gap = nextAnchor - anchor;
+    if (gap <= maxChainLookahead + 0.25) {
+      segAfter = Math.max(minRequiredSegAfter, gap - 0.25);
+    }
   }
   const nominalDur = timing.fixedKillWindow
     ? timing.maxSegDur ?? segBefore + segAfter
