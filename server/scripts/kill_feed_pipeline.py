@@ -2582,7 +2582,7 @@ def run_pipeline(
             existing_anchors = [k["anchor_s"] for k in kills]
             added = 0
             for ct, is_burst in card_times:
-                dedupe_threshold = 2.0 if is_burst else cfg.card_dedupe_vs_existing_sec
+                dedupe_threshold = 1.5 if is_burst else cfg.card_dedupe_vs_existing_sec
                 if all(abs(ct - a) > dedupe_threshold for a in existing_anchors):
                     kills.append(
                         {
