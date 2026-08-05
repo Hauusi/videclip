@@ -145,6 +145,14 @@ class KillFeedConfig:
     # - 7.0s deckt sich mit dem bestehenden dedup_time_window_sec Standard.
     card_dedupe_vs_existing_sec: float = 6.5
 
+    death_roi_x0: float = 0.60
+    death_roi_y0: float = 0.85
+    death_roi_x1: float = 0.78
+    death_roi_y1: float = 1.00
+    death_alive_min_bright: int = 100
+    death_dead_max_bright: int = 5
+    death_confirm_samples: int = 2
+
 
 @dataclass
 class PipelineStats:
@@ -2365,6 +2373,63 @@ def scan_killstreak_cards(
     return confirmed
 
 
+def scan_pov_death_moments(
+    reader: FrameReader,
+    cfg: KillFeedConfig,
+    duration: float,
+) -> list[float]:
+    """Detect the moment the POV player's own HUD (ammo counter) disappears,
+    which happens exactly when the player dies in CS2 - independent of any
+    kill-feed OCR. Used to trim highlight clips before showing the player's
+    own death."""
+    NORM_W, NORM_H = 1280, 720
+
+    def ammo_bright_count(frame: np.ndarray) -> int:
+        if frame.shape[:2] != (NORM_H, NORM_W):
+            frame = cv2.resize(frame, (NORM_W, NORM_H), interpolation=cv2.INTER_AREA)
+        x0 = int(NORM_W * cfg.death_roi_x0)
+        y0 = int(NORM_H * cfg.death_roi_y0)
+        x1 = int(NORM_W * cfg.death_roi_x1)
+        y1 = int(NORM_H * cfg.death_roi_y1)
+        crop = frame[y0:y1, x0:x1]
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        return int((gray > 200).sum())
+
+    samples: list[tuple[float, int]] = []
+    t = cfg.spawn_cutoff_sec
+    while t < duration:
+        frame = get_frame(reader, t)
+        if frame is not None:
+            samples.append((round(t, 2), ammo_bright_count(frame)))
+        t += 0.5
+
+    deaths: list[float] = []
+    was_alive = False
+    i = 0
+    while i < len(samples):
+        t, n = samples[i]
+        if not was_alive:
+            if n >= cfg.death_alive_min_bright:
+                was_alive = True
+            i += 1
+            continue
+        if n <= cfg.death_dead_max_bright:
+            confirmed = True
+            for j in range(1, cfg.death_confirm_samples):
+                if i + j >= len(samples) or samples[i + j][1] > cfg.death_dead_max_bright:
+                    confirmed = False
+                    break
+            if confirmed:
+                deaths.append(t)
+                was_alive = False
+                i += cfg.death_confirm_samples
+                continue
+        i += 1
+
+    _kf_log(f"pov death scan: {len(deaths)} death moments detected")
+    return deaths
+
+
 def run_pipeline(
     video_path: str,
     duration: float,
@@ -2546,6 +2611,7 @@ def run_pipeline(
             f"partial_mode={'yes' if partial_mode else 'no'}"
         )
 
+        pov_death_times: list[float] = []
         kills: list[dict[str, Any]] = []
         skip_reasons: dict[str, int] = {}
         for entry in sorted(registry, key=lambda e: e["anchor_s"]):
@@ -2559,6 +2625,7 @@ def run_pipeline(
             )
             if kind == "death":
                 stats.pov_deaths_excluded += 1
+                pov_death_times.append(kill_output_anchor(entry, cfg))
                 continue
             if kind != "kill":
                 skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
@@ -2627,6 +2694,7 @@ def run_pipeline(
             "video": video_path,
             "pov_player": pov_rep,
             "kills": kills,
+            "pov_deaths": sorted(set(pov_death_times) | set(scan_pov_death_moments(reader, cfg, duration))),
             "clips": clips,
             "config": asdict(cfg),
             "stats": asdict(stats),
